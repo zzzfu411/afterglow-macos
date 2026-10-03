@@ -1,0 +1,41 @@
+name: macOS checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+      - name: Timer and cross-process storage
+        run: ./scripts/test.sh
+      - name: SwiftUI and WidgetKit compilation
+        run: ./scripts/check-native.sh
+      - name: Build local app
+        run: ./scripts/build-local.sh
+      - name: Build Xcode targets without signing
+        run: |
+          xcodebuild \
+            -project Afterglow.xcodeproj \
+            -scheme Afterglow \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/xcode-ci \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build

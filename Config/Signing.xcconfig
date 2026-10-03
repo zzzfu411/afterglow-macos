@@ -1,0 +1,6 @@
+// Set your real Apple development team in Xcode, or Config/Local.xcconfig.
+// Both targets must use the same team. A made-up team or ad-hoc signature
+// cannot authorize a shared App Group container.
+DEVELOPMENT_TEAM =
+AFTERGLOW_APP_GROUP = $(DEVELOPMENT_TEAM).app.afterglow.shared
+#include? "Local.xcconfig"
