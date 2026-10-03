@@ -43,6 +43,7 @@
 | 开始、暂停、继续、结束与专注记录 | 可用 |
 | 菜单栏快捷面板、键盘快捷键 | 已实现 |
 | 窗口毛玻璃与外观切换 | 已实机检查 |
+| 窗口缩放与自适应计时数字 | 可用 |
 | 小号 / 中号桌面小组件、App Intents 操作 | 源码已实现，待签名安装验证 |
 
 使用 Xcode 26+ 构建时，macOS 26 及以上使用 Liquid Glass 按钮；较早工具链或系统使用 Material。开启“减少透明度”时，背景回退为实色。
@@ -72,10 +73,11 @@ open .build/local/留白.app
 
 ```sh
 ./scripts/test.sh          # 状态转换、重启恢复、跨进程存储
+./scripts/test-window.sh   # 原生外观切换、窗口布局边界
 ./scripts/check-native.sh  # SwiftUI / WidgetKit 编译检查
 ```
 
-核心测试包含 34 项断言，以及 6 个进程并发执行的 246 次存储事务。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 自动检查测试、原生编译和完整 Xcode 构建。详细验证范围见 [QA.md](QA.md)。
+核心测试包含 34 项断言、6 个进程的 246 次存储事务，以及 75 项原生外观与布局检查。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 自动检查测试、原生编译和完整 Xcode 构建。详细验证范围见 [QA.md](QA.md)。
 
 ```text
 App/       原生窗口、菜单栏与设置

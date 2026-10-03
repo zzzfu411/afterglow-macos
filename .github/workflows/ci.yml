@@ -25,6 +25,8 @@ jobs:
           xcodebuild -version
       - name: Timer and cross-process storage
         run: ./scripts/test.sh
+      - name: Native appearance and responsive layout
+        run: ./scripts/test-window.sh
       - name: SwiftUI and WidgetKit compilation
         run: ./scripts/check-native.sh
       - name: Build local app

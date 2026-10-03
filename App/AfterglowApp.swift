@@ -6,9 +6,6 @@ final class FocusModel: ObservableObject {
     @Published var state = FocusState()
     @Published var error: String?
     @Published var showHistory = false
-    @Published var appearance = FocusAppearance(rawValue: UserDefaults.standard.string(forKey: "afterglow.appearance") ?? "dark") ?? .dark {
-        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "afterglow.appearance") }
-    }
     private var poll: Timer?
     private let store = FocusStore.shared
 
@@ -43,29 +40,28 @@ final class FocusModel: ObservableObject {
 @main
 struct AfterglowApp: App {
     @StateObject private var model = FocusModel()
+    @StateObject private var appearance = FocusAppearanceController(
+        selection: FocusAppearance(rawValue: UserDefaults.standard.string(forKey: "afterglow.appearance") ?? "system") ?? .system,
+        defaults: .standard
+    )
 
     var body: some Scene {
         Window("留白", id: "main") {
             FocusWindow(model: model)
-                .preferredColorScheme(model.appearance.colorScheme)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .focusedSceneObject(model)
                 .onOpenURL { _ in NSApp.activate(ignoringOtherApps: true) }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: FocusWindowLayout.defaultSize.width, height: FocusWindowLayout.defaultSize.height)
         .defaultPosition(.center)
-        .commands {
-            CommandMenu("计时") {
-                Button(model.state.primaryLabel) { model.send(model.state.primaryAction) }
-                    .keyboardShortcut(.space, modifiers: [])
-                Button("结束") { model.send(.finish) }
-                    .keyboardShortcut(".", modifiers: .command)
-                    .disabled(!model.state.isActive)
-            }
-        }
+        .commands { TimerCommands() }
 
         MenuBarExtra {
             MenuPanel(model: model)
-                .preferredColorScheme(model.appearance.colorScheme)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .focusedSceneObject(model)
         } label: {
             // A stable image avoids AppKit status-item layout churn from a
             // constantly invalidating date Text. The popover shows the timer.
@@ -76,7 +72,7 @@ struct AfterglowApp: App {
 
         Settings {
             VStack(alignment: .leading, spacing: 20) {
-                Picker("外观", selection: $model.appearance) {
+                Picker("外观", selection: $appearance.selection) {
                     ForEach(FocusAppearance.allCases, id: \.self) { item in
                         Text(item.title).tag(item)
                     }
@@ -100,7 +96,30 @@ struct AfterglowApp: App {
             .font(.system(size: 13))
             .padding(28)
             .frame(width: 370)
-            .preferredColorScheme(model.appearance.colorScheme)
+            .foregroundStyle(.primary)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .environment(\.colorScheme, appearance.colorScheme)
+        }
+        .windowResizability(.contentSize)
+    }
+}
+
+private struct TimerCommands: Commands {
+    // The Settings scene intentionally has no focused timer. Space should
+    // operate its selected control, not start a session behind the window.
+    @FocusedObject private var model: FocusModel?
+
+    var body: some Commands {
+        CommandMenu("计时") {
+            Button(model?.state.primaryLabel ?? "开始") {
+                guard let model else { return }
+                model.send(model.state.primaryAction)
+            }
+            .keyboardShortcut(.space, modifiers: [])
+            .disabled(model == nil)
+            Button("结束") { model?.send(.finish) }
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(model?.state.isActive != true)
         }
     }
 }

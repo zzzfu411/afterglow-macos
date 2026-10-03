@@ -9,7 +9,7 @@
 ## 提交改进
 
 1. Fork 仓库，在单独分支完成一个明确的改动。
-2. 运行与改动相关的检查。计时与存储改动运行 `./scripts/test.sh`；SwiftUI / WidgetKit 改动运行 `./scripts/check-native.sh`，并查看真实界面。
+2. 运行与改动相关的检查。计时与存储改动运行 `./scripts/test.sh`；外观和布局运行 `./scripts/test-window.sh`；SwiftUI / WidgetKit 改动运行 `./scripts/check-native.sh`，并查看真实界面。
 3. PR 描述说明问题、改动后的行为和验证结果。界面改动附前后对比，注明是实际运行截图还是设计示意。
 
 工程由 `scripts/generate-project.py` 维护。增删源文件时同步更新生成器并重新生成项目。
@@ -21,6 +21,6 @@
 - `App/`：窗口、菜单栏、外观与设置。
 - `Widget/`：timeline 和 App Intents。
 - `Shared/`：纯状态转换、带文件锁的共享存储与共用视图。
-- `Tests/`：不依赖第三方测试框架的 Foundation 检查。
+- `Tests/`：不依赖第三方测试框架的状态、存储及原生外观检查。
 
 提交的贡献采用项目现有的 [MIT 许可](LICENSE)。

@@ -41,6 +41,7 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 | Start, pause, resume, finish, and session history | Available |
 | Menu bar panel and keyboard shortcuts | Implemented |
 | Window materials and appearance switching | Checked on a real Mac |
+| Resizable window and adaptive timer size | Available |
 | Small / medium WidgetKit widgets and App Intents | Implemented; signed installation not yet validated |
 
 When built with Xcode 26+, app buttons use Liquid Glass on macOS 26+. Earlier toolchains or systems use Material. Reduce Transparency switches surfaces to solid colors.
@@ -70,10 +71,11 @@ Local builds are ad-hoc signed. No notarized distribution is available yet. Runt
 
 ```sh
 ./scripts/test.sh          # Timer transitions, restart, and concurrent storage
+./scripts/test-window.sh   # Native appearance transitions and layout bounds
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-The core suite covers 34 assertions, including 246 transactions across six concurrent processes. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+Tests cover 34 core assertions, 246 transactions across six concurrent processes, and 75 native appearance and layout checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
 
 ```text
 App/       Windows, menu bar, and settings

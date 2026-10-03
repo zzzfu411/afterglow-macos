@@ -6,28 +6,56 @@ struct FocusWindow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button { model.showHistory.toggle() } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 13, weight: .regular))
-                        .frame(width: 28, height: 28)
-                }
-                .help("记录")
-                .accessibilityLabel("记录")
-                .popover(isPresented: $model.showHistory, arrowEdge: .bottom) {
-                    HistoryView(state: model.state)
-                }
-                SettingsLink { Image(systemName: "slider.horizontal.3").frame(width: 28, height: 28) }
-                    .help("设置")
-                    .accessibilityLabel("设置")
+        GeometryReader { geometry in
+            let layout = FocusWindowLayout(size: geometry.size)
+            VStack(spacing: 0) {
+                windowActions
+                timerContent(layout: layout)
+                    .frame(width: layout.contentWidth, height: layout.contentHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 20)
-            .padding(.top, 6)
+        }
+        .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
+        .background(NativeWindowSurface())
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
+        .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
+        .alert("无法保存", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+            Button("好", role: .cancel) { model.error = nil }
+        } message: { Text(model.error ?? "") }
+    }
 
+    private var windowActions: some View {
+        HStack(spacing: 8) {
+            WindowDragRegion()
+                .accessibilityHidden(true)
+            Button { model.showHistory.toggle() } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 13, weight: .regular))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .help("记录")
+            .accessibilityLabel("记录")
+            .popover(isPresented: $model.showHistory, arrowEdge: .bottom) {
+                HistoryView(state: model.state)
+            }
+            SettingsLink {
+                Image(systemName: "slider.horizontal.3")
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .help("设置")
+            .accessibilityLabel("设置")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .frame(height: FocusWindowLayout.toolbarHeight)
+    }
+
+    private func timerContent(layout: FocusWindowLayout) -> some View {
+        VStack(spacing: 0) {
             Picker("模式", selection: Binding(get: { model.state.mode }, set: { model.send(.selectMode($0)) })) {
                 Label("专注", systemImage: "circle.dotted.circle").tag(FocusMode.focus)
                 Label("休息", systemImage: "cup.and.saucer").tag(FocusMode.rest)
@@ -38,17 +66,17 @@ struct FocusWindow: View {
             .disabled(model.state.isActive)
             .padding(.top, 14)
 
-            Spacer(minLength: 22)
+            Spacer(minLength: 12)
 
             VStack(spacing: 9) {
                 TimelineView(.periodic(from: Date(), by: 1)) { context in
-                    TimerReadout(state: model.state, size: 78, date: context.date, live: false)
+                    TimerReadout(state: model.state, size: layout.timerSize, date: context.date, live: false)
                 }
-                .frame(height: 89)
+                .frame(height: ceil(layout.timerSize * 1.16))
                 statusLine.frame(height: 18)
             }
 
-            Spacer(minLength: 20)
+            Spacer(minLength: 12)
 
             HStack(spacing: 8) {
                 ForEach(model.state.mode.presets, id: \.self) { minutes in
@@ -59,6 +87,7 @@ struct FocusWindow: View {
                             .frame(width: 63, height: 29)
                             .background(selected(minutes) ? Color.primary.opacity(0.085) : .clear, in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.primary.opacity(selected(minutes) ? 0.05 : 0), lineWidth: 0.5))
+                            .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(model.state.isActive)
@@ -69,6 +98,8 @@ struct FocusWindow: View {
 
             HStack(spacing: 24) {
                 Color.clear.frame(width: 38, height: 38)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 Button { model.send(model.state.primaryAction) } label: {
                     TimerSymbol(symbol: model.state.primarySymbol, primary: true, diameter: 56, nativeGlass: true)
                 }
@@ -77,24 +108,19 @@ struct FocusWindow: View {
                 .accessibilityLabel(model.state.primaryLabel)
                 Button { model.send(.finish) } label: {
                     TimerSymbol(symbol: "stop.fill", diameter: 34, nativeGlass: true)
+                        .frame(width: 38, height: 38)
                 }
                 .buttonStyle(.plain)
                 .help("结束（⌘ .）")
                 .accessibilityLabel("结束")
                 .disabled(!model.state.isActive)
                 .opacity(model.state.isActive ? 1 : 0)
+                .allowsHitTesting(model.state.isActive)
                 .accessibilityHidden(!model.state.isActive)
             }
             .padding(.top, 22)
-            .padding(.bottom, 31)
+            .padding(.bottom, 24)
         }
-        .frame(width: 348, height: 368)
-        .background(NativeWindowSurface())
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
-        .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
-        .alert("无法保存", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
-            Button("好", role: .cancel) { model.error = nil }
-        } message: { Text(model.error ?? "") }
     }
 
     private func selected(_ minutes: Int) -> Bool { Int(model.state.duration / 60) == minutes }
@@ -116,6 +142,20 @@ struct FocusWindow: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+}
+
+/// This is only the empty portion of the toolbar; controls retain their normal
+/// click behavior, while the native title bar remains available above it.
+private struct WindowDragRegion: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ nsView: DragView, context: Context) {}
+
+    final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
     }
 }
 
@@ -136,13 +176,21 @@ struct MenuPanel: View {
             }
             TimerReadout(state: model.state, size: 58)
             HStack(spacing: 16) {
+                Color.clear.frame(width: 40, height: 40)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 Button { model.send(model.state.primaryAction) } label: {
                     TimerSymbol(symbol: model.state.primarySymbol, primary: true, nativeGlass: true)
-                }.accessibilityLabel(model.state.primaryLabel)
-                if model.state.isActive {
-                    Button { model.send(.finish) } label: { TimerSymbol(symbol: "stop.fill", nativeGlass: true) }
-                        .accessibilityLabel("结束")
                 }
+                .help("\(model.state.primaryLabel)（空格）")
+                .accessibilityLabel(model.state.primaryLabel)
+                Button { model.send(.finish) } label: { TimerSymbol(symbol: "stop.fill", nativeGlass: true) }
+                    .help("结束（⌘ .）")
+                    .accessibilityLabel("结束")
+                    .disabled(!model.state.isActive)
+                    .opacity(model.state.isActive ? 1 : 0)
+                    .allowsHitTesting(model.state.isActive)
+                    .accessibilityHidden(!model.state.isActive)
             }
         }
         .buttonStyle(.plain)

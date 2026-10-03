@@ -58,6 +58,7 @@ App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代�
 
 ```sh
 ./scripts/test.sh
+./scripts/test-window.sh
 ./scripts/check-native.sh
 ./scripts/render-preview.sh
 ./scripts/render-icon.sh
@@ -67,6 +68,8 @@ python3 scripts/generate-project.py
 `render-preview.sh` 导出共用视图的字体、布局和静态材质配色示意。离屏渲染无法取样真实桌面，不用于验证 WindowServer 或 WidgetKit 的背景模糊。
 
 工程由 `generate-project.py` 生成；修改源文件列表或工程配置时，更新生成器后重新生成，避免下一次生成覆盖手动调整。
+
+`test-window.sh` 在独立进程内装载 AppKit / SwiftUI 和未显示窗口，验证外观继承与布局边界。需要可访问 macOS 窗口服务的登录会话；不会改变系统外观、应用的真实偏好或计时数据。
 
 ## 发布前
 
