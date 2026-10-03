@@ -21,7 +21,7 @@
   <br /><sub>Layout and color study. macOS composites the actual background blur.</sub>
 </p>
 
-> **Early preview:** the native app runs locally. WidgetKit code compiles and links; signed installation and on-desktop interactions still need validation.
+> **Early preview:** the native app runs locally. Both app and widget pass a full Xcode build; signed installation and on-desktop interactions still need validation.
 
 ## Why Afterglow
 
@@ -43,7 +43,7 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 | Window materials and appearance switching | Checked on a real Mac |
 | Small / medium WidgetKit widgets and App Intents | Implemented; signed installation not yet validated |
 
-On macOS 26+, app buttons use Liquid Glass; earlier systems use Material. Reduce Transparency switches surfaces to solid colors.
+When built with Xcode 26+, app buttons use Liquid Glass on macOS 26+. Earlier toolchains or systems use Material. Reduce Transparency switches surfaces to solid colors.
 
 ## Get started
 
@@ -73,7 +73,7 @@ Local builds are ad-hoc signed. No notarized distribution is available yet. Runt
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-The core suite covers 34 assertions, including 246 transactions across six concurrent processes. See [QA.md](QA.md) for validation scope and remaining gaps.
+The core suite covers 34 assertions, including 246 transactions across six concurrent processes. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
 
 ```text
 App/       Windows, menu bar, and settings

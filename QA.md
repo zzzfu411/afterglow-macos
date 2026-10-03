@@ -4,6 +4,15 @@
 
 环境：Apple Silicon，macOS 27.0.1，Swift 6.4，CLT macOS SDK，Swift 5 language mode，部署目标 macOS 14。
 
+## GitHub Actions
+
+[首次 CI 构建](https://github.com/zzzfu411/afterglow-macos/actions/runs/37129782012)通过，验证提交为 `29e4340`。环境为 `macos-15`、Xcode 16.4、Swift 6.1.2、macOS 15.5 SDK。
+
+- 34 项核心断言及 6 进程／246 次存储事务通过。
+- 主应用和 WidgetKit 扩展编译、链接通过，本地预览 `.app` 构建通过。
+- Xcode 完整工程构建通过，包含 arm64 与 x86_64、两个 target 的 `Metadata.appintents` 生成和扩展嵌入。
+- CI 关闭代码签名，仅验证构建；不代表 App Group 授权、桌面注册或交互验证。Liquid Glass 新分支由本机较新工具链编译验证，CI 也验证旧工具链的 Material 分支。
+
 ## 0.2 视觉更新
 
 - 新增 `NSVisualEffectView` 窗口后方模糊、明确的深浅色材质外观；主按钮使用 macOS 26 Liquid Glass，旧系统保留 Material 分支。
@@ -31,7 +40,7 @@
 
 ## 尚未验证
 
-这台机器没有完整 Xcode，没有验证 Xcode 全工程构建、签名 App Group 授权、App Intents 元数据生成、系统小组件图库注册、桌面按钮或退出宿主后的交互。
+本机没有完整 Xcode；全工程构建与 App Intents 元数据生成已由上述 CI 验证。签名 App Group 授权、系统小组件图库注册、桌面按钮或退出宿主后的交互仍未验证。
 
 编译成功、原生预览图和主窗口运行成功都不能替代这一步。没有生成或注册一个未经验证的 `.appex` 安装包，也没有改变系统开发工具选择或系统安全设置。
 

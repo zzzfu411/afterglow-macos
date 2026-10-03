@@ -38,7 +38,7 @@ DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
 App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代共享容器授权。组件访问不到共享容器时会显示“打开留白”，而不是创建一个独立计时器。
 
-**状态：组件源码已编译、链接；签名后的桌面安装与交互尚未验证。** 完整检查记录见 [QA.md](../QA.md)。
+**状态：主应用与组件已通过完整 Xcode 构建及 App Intents 元数据生成；签名后的桌面安装与交互尚未验证。** 完整检查记录见 [QA.md](../QA.md)。
 
 ## 数据与外观
 
@@ -52,7 +52,7 @@ App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代�
 
 计时使用保存的截止日期。每次写入都会持有文件锁，读取最新状态后原子保存；过期结算使用原截止时间，历史记录以 UUID 去重。组件数字由系统日期视图更新，业务代码不依赖每秒后台执行。
 
-主窗口使用 `NSVisualEffectView` 对窗口后方内容进行模糊。macOS 26+ 的按钮使用 Liquid Glass，旧系统使用 Material；“减少透明度”开启时使用实色。桌面组件的最终外观由 WidgetKit 渲染模式决定。
+主窗口使用 `NSVisualEffectView` 对窗口后方内容进行模糊。以 Xcode 26+ 构建时，macOS 26+ 的按钮使用 Liquid Glass；较早工具链或系统使用 Material。“减少透明度”开启时使用实色。桌面组件的最终外观由 WidgetKit 渲染模式决定。
 
 ## 开发命令
 

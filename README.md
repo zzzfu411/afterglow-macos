@@ -23,7 +23,7 @@
   <br /><sub>组件布局与配色示意。实际背景模糊由 macOS 渲染。</sub>
 </p>
 
-> **预览阶段**：主应用已可运行。WidgetKit 小组件代码已通过编译与链接检查，签名安装和桌面交互仍待验证。
+> **预览阶段**：主应用已可运行。主应用与小组件已通过完整 Xcode 构建，签名安装和桌面交互仍待验证。
 
 ## 为什么做留白
 
@@ -45,7 +45,7 @@
 | 窗口毛玻璃与外观切换 | 已实机检查 |
 | 小号 / 中号桌面小组件、App Intents 操作 | 源码已实现，待签名安装验证 |
 
-macOS 26 及以上使用 Liquid Glass 按钮；较早系统使用 Material。开启“减少透明度”时，背景回退为实色。
+使用 Xcode 26+ 构建时，macOS 26 及以上使用 Liquid Glass 按钮；较早工具链或系统使用 Material。开启“减少透明度”时，背景回退为实色。
 
 ## 快速开始
 
@@ -75,7 +75,7 @@ open .build/local/留白.app
 ./scripts/check-native.sh  # SwiftUI / WidgetKit 编译检查
 ```
 
-核心测试包含 34 项断言，以及 6 个进程并发执行的 246 次存储事务。详细边界与实机检查见 [QA.md](QA.md)。
+核心测试包含 34 项断言，以及 6 个进程并发执行的 246 次存储事务。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 自动检查测试、原生编译和完整 Xcode 构建。详细验证范围见 [QA.md](QA.md)。
 
 ```text
 App/       原生窗口、菜单栏与设置
