@@ -22,8 +22,8 @@ def obj(name, isa, fields):
 def refs(names):
     return '(' + ', '.join(uid(name) for name in names) + ', )'
 
-shared = ['Shared/FocusState.swift', 'Shared/FocusStore.swift', 'Shared/FocusViews.swift']
-app = ['App/AfterglowApp.swift', 'App/FocusWindow.swift', 'App/FocusSettings.swift', 'App/FocusLayout.swift', 'App/NativeMaterial.swift',
+shared = ['Shared/FocusTodo.swift', 'Shared/FocusState.swift', 'Shared/FocusStore.swift', 'Shared/FocusViews.swift']
+app = ['App/AfterglowApp.swift', 'App/FocusWindow.swift', 'App/FocusTodosView.swift', 'App/FocusSettings.swift', 'App/FocusLayout.swift', 'App/NativeMaterial.swift',
        'App/FocusModel.swift', 'App/FocusReminders.swift', 'App/FocusStoreObservation.swift']
 intent = ['Widget/TimerIntents.swift']
 widget = ['Widget/AfterglowWidget.swift']
@@ -83,7 +83,7 @@ for target in ['project', 'Afterglow', 'AfterglowWidgets']:
                 'INFOPLIST_FILE': 'Widget/Info.plist' if is_widget else 'App/Info.plist',
                 'CODE_SIGN_ENTITLEMENTS': 'Config/Widget.entitlements' if is_widget else 'Config/App.entitlements',
                 'GENERATE_INFOPLIST_FILE': 'NO', 'ENABLE_APP_SANDBOX': 'YES', 'ENABLE_HARDENED_RUNTIME': 'YES',
-                'CURRENT_PROJECT_VERSION': '6', 'MARKETING_VERSION': '0.3.2',
+                'CURRENT_PROJECT_VERSION': '7', 'MARKETING_VERSION': '0.4.0',
                 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'AFTERGLOW_WIDGET' if is_widget else '',
                 'LD_RUNPATH_SEARCH_PATHS': '$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks' if is_widget else '$(inherited) @executable_path/../Frameworks',
                 'SKIP_INSTALL': 'YES' if is_widget else 'NO',

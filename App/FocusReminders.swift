@@ -62,7 +62,7 @@ final class SystemReminderDelivery: NSObject, ReminderDelivery, UNUserNotificati
         let interval = reminder.deadline.timeIntervalSinceNow
         guard interval > 0 else { return }
         let content = UNMutableNotificationContent()
-        content.title = reminder.mode == .focus ? "专注完成" : "休息结束"
+        content.title = reminder.mode == .focus ? "专注结束" : "休息结束"
         content.body = reminder.mode == .focus ? "休息一下。" : "准备好了就开始。"
         content.sound = .default
         content.userInfo = ["sessionID": reminder.sessionID.uuidString]

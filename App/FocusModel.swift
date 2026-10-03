@@ -7,6 +7,8 @@ final class FocusModel: ObservableObject {
     @Published private(set) var state = FocusState()
     @Published var error: String?
     @Published var showHistory = false
+    @Published var showTodos = false
+    @Published var todoDraft: TodoDraft?
     @Published var isEditingDuration = false
     let reminders: FocusReminders?
     private let store: FocusStore
@@ -63,7 +65,7 @@ final class FocusModel: ObservableObject {
         refresh(force: true)
     }
 
-    func send(_ action: FocusAction) {
+    @discardableResult func send(_ action: FocusAction) -> Bool {
         do {
             let updated = try store.update(action)
             let starting = updated.status == .running && state.status != .running
@@ -71,7 +73,32 @@ final class FocusModel: ObservableObject {
             // Ask once, in context of a start click in the app. Widget intents
             // never show a permission sheet or foreground the app unexpectedly.
             if starting { reminders?.reconcile(updated, requestPermission: true) }
-        } catch { self.error = storageMessage(for: error) }
+            return true
+        } catch { self.error = storageMessage(for: error); return false }
+    }
+
+    func newTodo() {
+        if todoDraft == nil { todoDraft = TodoDraft() }
+        showHistory = false
+        showTodos = true
+    }
+
+    func saveTodo() {
+        guard let draft = todoDraft, let minutes = FocusTodo.parseMinutes(draft.minutes) else { return }
+        let item = FocusTodo(id: draft.id, title: draft.title, minutes: minutes)
+        guard item.isValid else { return }
+        if draft.isNew && state.todos.count >= FocusTodo.maximumCount {
+            error = "清单最多保留 \(FocusTodo.maximumCount) 项，请先删除不再需要的事项。"
+            return
+        }
+        let action: FocusAction = draft.isNew ? .addTodo(item) : .editTodo(item.id, title: item.title, minutes: item.minutes)
+        if send(action) {
+            guard state.todos.contains(where: { $0.id == item.id && $0.title == item.title && $0.minutes == item.minutes }) else {
+                error = "清单已变化，请关闭编辑后重试。"
+                return
+            }
+            todoDraft = nil
+        }
     }
 
     private func storageMessage(for error: Error) -> String {
@@ -112,5 +139,24 @@ final class FocusModel: ObservableObject {
         }
         if changed || force { reminders?.reconcile(state) }
         if changed, shared { WidgetCenter.shared.reloadAllTimelines() }
+    }
+}
+
+/// Keep an unfinished draft across popover dismissals without persisting keystrokes.
+struct TodoDraft {
+    var id: UUID = UUID()
+    var title = ""
+    var minutes = "25"
+    var isNew = true
+
+    init(item: FocusTodo? = nil) {
+        if let item {
+            id = item.id; title = item.title; minutes = String(item.minutes); isNew = false
+        }
+    }
+
+    var isValid: Bool {
+        guard let value = FocusTodo.parseMinutes(minutes) else { return false }
+        return FocusTodo(title: title, minutes: value).isValid
     }
 }

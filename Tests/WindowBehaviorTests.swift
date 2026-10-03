@@ -108,7 +108,7 @@ struct WindowBehaviorTests {
 
         let minimum = FocusWindowLayout.minimumSize
         let sizes = [minimum, FocusWindowLayout.defaultSize, CGSize(width: 720, height: 640),
-                     CGSize(width: 320, height: 800), CGSize(width: 900, height: 360)]
+                     CGSize(width: 320, height: 800), CGSize(width: 900, height: minimum.height)]
         for size in sizes {
             let layout = FocusWindowLayout(size: size)
             expect(layout.contentWidth <= size.width - 40, "content keeps horizontal insets at \(size)")
@@ -116,7 +116,7 @@ struct WindowBehaviorTests {
             expect(layout.timerSize >= 72 && layout.timerSize <= 112, "readout remains within readable scale bounds")
             expect(layout.contentWidth >= 262, "presets and the editable custom duration fit together")
             // Picker + readout/status + presets + controls + required gaps.
-            let fixedControlsHeight: CGFloat = 220
+            let fixedControlsHeight: CGFloat = 254
             let requiredHeight = fixedControlsHeight + ceil(layout.timerSize * 1.16)
             expect(requiredHeight <= layout.contentHeight, "full control stack fits at \(size)")
         }

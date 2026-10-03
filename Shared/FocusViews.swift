@@ -42,10 +42,24 @@ extension FocusState {
         return status == .running ? "pause.fill" : "play.fill"
     }
     var primaryLabel: String {
-        if status == .done { return mode == .focus ? "休息 \(Int(restDuration / 60)) 分" : "专注 \(Int(focusDuration / 60)) 分" }
+        if status == .done { return mode == .focus ? "休息 \(Int(restDuration / 60)) 分" : "专注 \(Int(plannedFocusDuration / 60)) 分" }
         return status == .running ? "暂停" : (status == .paused ? "继续" : "开始")
     }
     var primaryAction: FocusAction { status == .done ? .startNext : (status == .running ? .pause : .start) }
+    var focusTargetTitle: String {
+        if mode == .focus && status != .idle && !(sessionTodoIDs ?? []).isEmpty {
+            return sessionTask ?? "整张清单"
+        }
+        switch focusTarget {
+        case .free: return "自由专注"
+        case .todo: return plannedTask
+        case .list: return "整张清单 · \(todoList?.selected.count ?? 0) 项"
+        }
+    }
+    var shortDuration: String {
+        let minutes = Int(duration / 60)
+        return "\(minutes) 分"
+    }
     func clock(at date: Date = Date()) -> String {
         let seconds = max(0, Int(ceil(remaining(at: date))))
         if seconds >= 3600 {

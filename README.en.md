@@ -2,7 +2,7 @@
 
 <h1 align="center">Afterglow · 留白</h1>
 
-<p align="center">A quiet, native focus timer for macOS.</p>
+<p align="center">Turn a to-do into focused time. Native macOS, offline, quiet.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-475569?logo=apple&logoColor=white" alt="macOS 14 or later" />
@@ -25,11 +25,13 @@
 
 ## Why Afterglow
 
-A focus timer should ask for little attention. Afterglow keeps time and controls up front, with history and settings available when needed.
+Write down a task, estimate its time, and focus. Afterglow connects your checklist, timer, and session history while keeping the main window simple.
 
 - **At home on Mac.** SwiftUI, AppKit, system materials, SF Pro, and SF Symbols. Dark, light, and automatic appearance.
 - **A few clicks.** Pick a duration and start. Press Space to pause or resume, or use the menu bar panel.
-- **Offline by design.** No accounts, servers, or telemetry. Session history stays on your Mac.
+- **From tasks to time.** Choose one item, the whole unfinished list, or free focus. Estimates set the timer; session duration can be adjusted independently.
+- **Completion stays yours.** Mark tasks done yourself. Editing the list leaves the current countdown and historical task names intact.
+- **Offline by design.** No accounts, servers, or telemetry. Tasks and session history stay on your Mac.
 - **Keeps its place.** Persisted deadlines survive sleep and relaunch. Paused time does not count as focused time.
 - **Quiet in the background.** Event-driven storage and a single deadline wake-up. No idle polling or third-party runtime dependencies. [Measurement notes](docs/PERFORMANCE.md).
 
@@ -39,6 +41,8 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 | --- | --- |
 | 15 / 25 / 45-minute focus; 5 / 10 / 15-minute breaks | Available |
 | Type 1–180 minutes and press Return; focus and break durations remembered separately | Available |
+| Tasks with estimates, editing, completion, reopening, and deletion confirmation | Available |
+| Single-task, whole-list, or free focus; adjustable session duration | Available |
 | Start, pause, resume, finish, and session history | Available |
 | One-click next phase and wrap-up | Available |
 | System completion reminders and sound | Implemented; requires permission; OS delivery not yet verified |
@@ -48,6 +52,14 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 | Small / medium WidgetKit widgets and App Intents | Implemented; signed installation not yet validated |
 
 When built with Xcode 26+, app buttons use Liquid Glass on macOS 26+. Earlier toolchains or systems use Material. Reduce Transparency switches surfaces to solid colors.
+
+### Start with a task
+
+1. Open the checklist or press `⌘ N`. Enter a task and estimated minutes.
+2. Select a task title or the whole list, then start the timer.
+3. When the timer ends, open completion and check off the tasks you actually finished.
+
+A whole-list session is one countdown totaling unfinished estimates. Each estimate is 1–180 minutes, with up to 100 saved items; a whole list can exceed 180 minutes. Adjusting the session timer does not change task estimates. Free focus retains its own duration, and completed items collapse into a separate section.
 
 ## Get started
 
@@ -66,6 +78,7 @@ This builds the app and menu bar panel only. Desktop widgets require full Xcode 
 | --- | --- |
 | `Space` | Start / pause / resume |
 | `⌘ .` | Finish |
+| `⌘ N` | Add a task |
 | `⌘ ,` | Settings |
 
 Local builds are ad-hoc signed. No notarized distribution is available yet. Runtime validation has primarily used Apple Silicon. See [packaging and distribution](docs/RELEASING.md).
@@ -81,7 +94,9 @@ The first start in the app requests notification permission; Settings also offer
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-Tests cover 46 core assertions, 246 transactions across six concurrent processes, 87 native appearance, layout, and display checks, and 60 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+Tests cover 96 core assertions, 246 transactions across six concurrent processes, 87 native appearance, layout, and display checks, and 70 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+
+Existing timer data loads directly. The first checklist write upgrades storage to version 2; older apps reject that format instead of silently dropping tasks. Back up your data and use a matching older data file before downgrading.
 
 ```text
 App/       Windows, menu bar, and settings

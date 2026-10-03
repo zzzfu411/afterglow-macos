@@ -20,11 +20,21 @@ struct FocusWindow: View {
         .background(NativeWindowSurface())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
         .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
-        .onChange(of: durationPicker.isPresented) { _, presented in model.isEditingDuration = presented }
+        .onChange(of: durationPicker.isPresented) { _, presented in
+            model.isEditingDuration = presented
+            if presented { model.showTodos = false; model.showHistory = false }
+        }
+        .onChange(of: model.showTodos) { _, presented in
+            if presented { durationPicker.isPresented = false; model.showHistory = false }
+        }
+        .onChange(of: model.showHistory) { _, presented in
+            if presented { durationPicker.isPresented = false; model.showTodos = false }
+        }
         .onDisappear {
             durationPicker.isPresented = false
             model.isEditingDuration = false
             model.showHistory = false
+            model.showTodos = false
         }
         .alert("计时数据暂不可用", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("重试") { model.retryStorage() }
@@ -37,6 +47,11 @@ struct FocusWindow: View {
             WindowDragRegion()
                 .accessibilityHidden(true)
             if let reminders = model.reminders { ReminderIndicator(reminders: reminders) }
+            Button { model.showTodos.toggle() } label: {
+                Image(systemName: "checklist")
+                    .frame(width: 28, height: 28).contentShape(Rectangle())
+            }
+            .help("待办清单").accessibilityLabel("待办清单")
             Button { model.showHistory.toggle() } label: {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 13, weight: .regular))
@@ -75,6 +90,30 @@ struct FocusWindow: View {
             .disabled(model.state.isActive)
             .padding(.top, 14)
 
+            Group {
+                if model.state.mode == .focus {
+                    Button { model.showTodos = true } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checklist")
+                            Text(model.state.focusTargetTitle).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium))
+                        }
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).frame(height: 28)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.state.focusTargetTitle)
+                    .accessibilityLabel("专注事项：\(model.state.focusTargetTitle)")
+                } else {
+                    Color.clear.frame(height: 28).accessibilityHidden(true)
+                }
+            }
+            .padding(.top, 6)
+            .popover(isPresented: $model.showTodos, arrowEdge: .bottom) {
+                FocusTodosView(model: model)
+            }
+
             Spacer(minLength: 12)
 
             VStack(spacing: 9) {
@@ -101,12 +140,17 @@ struct FocusWindow: View {
                     .accessibilityAddTraits(selected(minutes) ? .isSelected : [])
                 }
                 Button {
-                    durationPicker.text = String(Int(model.state.duration / 60))
+                    let duration = model.state.status == .done
+                        ? (model.state.mode == .focus ? model.state.plannedFocusDuration : model.state.restDuration)
+                        : model.state.duration
+                    durationPicker.text = String(Int(duration / 60))
+                    durationPicker.maximumMinutes = Int(model.state.durationLimit / 60)
                     model.isEditingDuration = true
                     durationPicker.isPresented = true
                 } label: {
-                    Label(customDurationSelected ? "\(Int(model.state.duration / 60)) 分" : "自定", systemImage: "pencil")
+                    Label(customDurationSelected ? model.state.shortDuration : "自定", systemImage: "pencil")
                         .font(.system(size: 12, weight: customDurationSelected ? .medium : .regular))
+                        .lineLimit(1).minimumScaleFactor(0.75)
                         .frame(width: 64, height: 29)
                         .background(customDurationSelected ? Color.primary.opacity(0.085) : .clear, in: Capsule())
                         .contentShape(Capsule())
@@ -171,7 +215,16 @@ struct FocusWindow: View {
                     }
                 }
             case .paused: Text("已暂停")
-            case .done: Label(model.state.mode == .focus ? "专注结束" : "休息结束", systemImage: "checkmark")
+            case .done:
+                if model.state.mode == .focus && !(model.state.sessionTodoIDs ?? []).isEmpty {
+                    Button { model.showTodos = true } label: {
+                        Label("勾选完成", systemImage: "checklist")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                    .accessibilityLabel("勾选已完成事项")
+                } else {
+                    Label(model.state.mode == .focus ? "专注结束" : "休息结束", systemImage: "checkmark")
+                }
             case .idle: Text("")
             }
         }
@@ -210,6 +263,17 @@ struct MenuPanel: View {
                     .help("打开留白").accessibilityLabel("打开留白")
             }
             TimerReadout(state: model.state, size: 58)
+            if model.state.mode == .focus {
+                Button {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                    model.showTodos = true
+                } label: {
+                    Label(model.state.focusTargetTitle, systemImage: "checklist")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .help("选择或查看待办")
+            }
             if model.state.status == .paused {
                 Text("已暂停").font(.caption).foregroundStyle(.secondary)
             }
@@ -264,9 +328,10 @@ struct HistoryView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: log.completed ? "checkmark.circle" : "circle.lefthalf.filled")
                                     .foregroundStyle(.secondary)
+                                    .help(log.completed ? "计时完成" : "提前结束")
                                     .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(log.task.isEmpty ? "专注" : log.task).lineLimit(1)
+                                    Text(log.task.isEmpty ? "专注" : log.task).lineLimit(2).help(log.task)
                                     Text(log.endedAt, format: .dateTime.month().day().hour().minute())
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
@@ -275,7 +340,7 @@ struct HistoryView: View {
                             }
                             .accessibilityElement(children: .ignore)
                             .accessibilityAddTraits(.isStaticText)
-                            .accessibilityLabel("\(log.task.isEmpty ? "专注" : log.task)，\(log.completed ? "已完成" : "提前结束")，\(log.durationLabel)，\(log.endedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .accessibilityLabel("\(log.task.isEmpty ? "专注" : log.task)，\(log.completed ? "计时完成" : "提前结束")，\(log.durationLabel)，\(log.endedAt.formatted(date: .abbreviated, time: .shortened))")
                         }
                     }
                 }.frame(maxHeight: 270)
@@ -294,10 +359,11 @@ struct HistoryView: View {
 private final class DurationPickerState: ObservableObject {
     @Published var isPresented = false
     @Published var text = "25"
+    var maximumMinutes = 180
 
     var minutes: Int? {
         guard let value = Int(text.precomposedStringWithCompatibilityMapping.trimmingCharacters(in: .whitespacesAndNewlines)),
-              (1...180).contains(value) else { return nil }
+              (1...maximumMinutes).contains(value) else { return nil }
         return value
     }
 }
@@ -317,12 +383,12 @@ private struct DurationEditor: View {
                     .focused($inputFocused)
                     .onSubmit(confirm)
                     .accessibilityLabel("自定分钟数")
-                    .help("1–180 分钟")
+                    .help("1–\(picker.maximumMinutes) 分钟")
                 Text("分钟")
                 Stepper("分钟", value: Binding(
                     get: { picker.minutes ?? 1 },
                     set: { picker.text = String($0) }
-                ), in: 1...180)
+                ), in: 1...picker.maximumMinutes)
                 .labelsHidden()
                 .fixedSize()
                 .disabled(picker.minutes == nil)
@@ -331,7 +397,7 @@ private struct DurationEditor: View {
             .font(.system(size: 20, weight: .medium))
             .monospacedDigit()
 
-            Text(picker.minutes == nil ? "输入 1–180 的整数" : "")
+            Text(picker.minutes == nil ? "输入 1–\(picker.maximumMinutes) 的整数" : "")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(height: 14)
@@ -357,28 +423,38 @@ private struct DurationEditor: View {
 struct TimerCommands: Commands {
     // Settings intentionally has no focused timer model.
     @FocusedObject private var model: FocusModel?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("添加待办") {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+                model?.newTodo()
+            }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(model == nil || model?.isEditingDuration == true || model?.error != nil)
+        }
         CommandMenu("计时") {
             Button(model?.state.primaryLabel ?? "开始") {
                 guard let model, canControlTimer else { return }
                 model.send(model.state.primaryAction)
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(model == nil || model?.isEditingDuration == true || model?.showHistory == true || model?.error != nil)
+            .disabled(model == nil || model?.isEditingDuration == true || model?.showHistory == true || model?.showTodos == true || model?.error != nil)
             Button("结束") {
                 guard canControlTimer else { return }
                 model?.send(.finish)
             }
             .keyboardShortcut(".", modifiers: .command)
-            .disabled(model?.state.isActive != true || model?.isEditingDuration == true || model?.showHistory == true || model?.error != nil)
+            .disabled(model?.state.isActive != true || model?.isEditingDuration == true || model?.showHistory == true || model?.showTodos == true || model?.error != nil)
         }
     }
 
     // A key equivalent can arrive before SwiftUI refreshes the menu's disabled
     // state. Also protect the native field editor at the time of the action.
     private var canControlTimer: Bool {
-        model != nil && model?.isEditingDuration != true && model?.showHistory != true && model?.error == nil
+        model != nil && model?.isEditingDuration != true && model?.showHistory != true && model?.showTodos != true && model?.error == nil
             && !(NSApp.keyWindow?.firstResponder is NSTextView)
     }
 }

@@ -294,6 +294,24 @@ struct RuntimeTests {
             await waitUntil("model observes repeated atomic writes \(index)") { active.state.task == "another-store-\(index)" }
         }
 
+        active.newTodo()
+        active.todoDraft?.title = "检查待办"
+        active.todoDraft?.minutes = "０"
+        active.saveTodo()
+        expect(active.state.todos.isEmpty && active.todoDraft != nil, "invalid draft cannot save or disappear")
+        active.todoDraft?.minutes = "３０"
+        active.saveTodo()
+        expect(active.state.todos.first?.minutes == 30 && active.todoDraft == nil, "draft saves normalized estimate and clears only on success")
+        let todo = active.state.todos[0]
+        active.send(.selectTarget(.todo(todo.id)))
+        expect(active.state.duration == 1800, "model selects a todo with its estimated deadline")
+        try await noPolling(active, directory: directory, label: "idle with todo list")
+        active.todoDraft = TodoDraft(item: todo)
+        active.todoDraft?.title = "编辑后的待办"
+        active.saveTodo()
+        expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办", "draft edits do not duplicate existing item")
+        active.showTodos = false
+
         active.send(.start)
         active.send(.pause)
         expect(active.state.status == .paused, "model pauses the running timer")
@@ -333,6 +351,10 @@ struct RuntimeTests {
         let preserved = try Data(contentsOf: directory.appendingPathComponent("focus-state.json"))
         try Data("invalid".utf8).write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
         await waitUntil("unreadable data exposes a recoverable error") { active.error != nil }
+        active.newTodo()
+        active.todoDraft?.title = "写入失败时保留"
+        active.saveTodo()
+        expect(active.todoDraft?.title == "写入失败时保留", "failed persistence keeps draft intact")
         try preserved.write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
         active.retryStorage()
         expect(active.error == nil && active.state.status == .paused, "retry clears the error after storage recovers without resetting the timer")

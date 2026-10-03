@@ -107,6 +107,98 @@ struct FocusStateTests {
         let shared = try FocusStore(directory: sharedDirectory).snapshot(at: Date(timeIntervalSince1970: 100_000))
         expect(shared.status == .paused, "246 concurrent toggles remain serialized")
         try shared.validate()
+        try testTodos(at: start)
         print("PASS: \(count) checks; includes 6 processes / 246 shared-store transactions.")
+    }
+
+    static func testTodos(at start: Date) throws {
+        let writing = FocusTodo(title: "  写初稿  ", minutes: 40)
+        let reading = FocusTodo(title: "读论文", minutes: 20)
+        let finished = FocusTodo(title: "整理桌面", minutes: 5, isCompleted: true)
+        let base = FocusState(duration: 900).applying(.addTodo(writing)).applying(.addTodo(reading)).applying(.addTodo(finished))
+        expect(base.version == 2 && base.todos.count == 3 && base.todos[0].title == "写初稿", "todo creation normalizes and versions data")
+        expect(base.duration == 900 && base.focusTarget == .free, "adding a todo does not opt into task timing")
+        expect(base.applying(.addTodo(writing)) == base, "duplicate task ID rejected")
+        for item in [FocusTodo(title: " \n", minutes: 25), FocusTodo(title: "x", minutes: 0), FocusTodo(title: "x", minutes: 181), FocusTodo(title: String(repeating: "字", count: 181), minutes: 1)] {
+            expect(base.applying(.addTodo(item)) == base, "invalid todo cannot enter store")
+        }
+        expect(FocusTodo.parseMinutes(" ３０ ") == 30 && FocusTodo.parseMinutes("2.5") == nil, "full-width minute input is validated")
+        let single = base.applying(.selectTarget(.todo(writing.id)))
+        expect(single.duration == 2400 && single.plannedTask == "写初稿", "single selection uses estimate and title")
+        expect(single.durationLimit == FocusState.maximumDuration && single.applying(.selectDuration(10_801)) == single, "single-task edits keep the normal duration limit")
+        let all = single.applying(.selectTarget(.list))
+        expect(all.duration == 3600 && all.todoList?.selected.count == 2 && all.plannedTask.contains("读论文"), "whole list sums only pending items")
+        expect(base.applying(.selectTarget(.todo(finished.id))) == base, "cannot select completed item")
+        expect(base.applying(.selectTarget(.todo(UUID()))) == base, "stale task selection ignored")
+        expect(all.applying(.selectTarget(.free)).duration == 900, "free timer retains separate duration")
+        let adjusted = single.applying(.selectDuration(600))
+        expect(adjusted.duration == 600 && adjusted.todos[0].minutes == 40 && adjusted.focusDuration == 900, "session override never overwrites estimates or free duration")
+        let renamed = adjusted.applying(.editTodo(writing.id, title: "润色", minutes: 40))
+        expect(renamed.duration == 600 && renamed.plannedTask == "润色", "rename retains an explicit time override")
+        expect(adjusted.applying(.editTodo(reading.id, title: "另一本", minutes: 30)).duration == 600, "unrelated edit preserves selected override")
+        let reestimated = adjusted.applying(.editTodo(writing.id, title: "写初稿", minutes: 50))
+        expect(reestimated.duration == 3000 && reestimated.todoList?.durationOverride == nil, "estimate change recalculates next session")
+        let restful = all.applying(.selectMode(.rest)).applying(.selectDuration(420))
+        expect(restful.applying(.selectMode(.focus)).duration == 3600 && restful.restDuration == 420, "breaks retain focus selection")
+        let running = all.applying(.start, at: start)
+        expect(running.sessionTodoIDs == [writing.id, reading.id], "session freezes selected members")
+        expect(running.applying(.selectTarget(.free), at: start) == running, "active target cannot be changed")
+        let edited = running.applying(.editTodo(writing.id, title: "改名", minutes: 1), at: start.addingTimeInterval(2))
+            .applying(.deleteTodo(reading.id), at: start.addingTimeInterval(3))
+        expect(edited.deadline == running.deadline && edited.duration == running.duration, "active list edits never reschedule timer")
+        expect(edited.currentTask == running.sessionTask && edited.sessionTodoIDs == running.sessionTodoIDs, "active labels survive rename and deletion")
+        let paused = edited.applying(.pause, at: start.addingTimeInterval(10))
+        let checked = paused.applying(.setTodoCompleted(writing.id, true), at: start.addingTimeInterval(12))
+        expect(checked.remaining == paused.remaining && checked.status == .paused, "checking task preserves paused session")
+        let ended = edited.applying(.finish, at: start.addingTimeInterval(60))
+        expect(ended.logs.last?.task == running.sessionTask && ended.logs.last?.seconds == 60, "history saves original target and active seconds")
+        expect(ended.currentTask == running.sessionTask, "done view retains original target")
+        let timedOut = running.applying(.settle, at: start.addingTimeInterval(4000))
+        expect(timedOut.todos.filter(\.isCompleted).count == 1, "timer completion never completes tasks automatically")
+        expect(timedOut.applying(.startNext, at: start.addingTimeInterval(4001)).mode == .rest, "task completion still offers one-click break")
+        let completed = single.applying(.setTodoCompleted(writing.id, true))
+        expect(completed.focusTarget == .free && completed.duration == 900, "completed selected task falls back to remembered free timer")
+        expect(completed.applying(.setTodoCompleted(writing.id, false)).todos[0].isCompleted == false, "completion is reversible")
+        let deleted = single.applying(.deleteTodo(writing.id))
+        expect(deleted.focusTarget == .free && deleted.todos.count == 2, "deleting selected task removes dangling selection")
+        expect(all.applying(.setTodoCompleted(writing.id, true)).duration == 1200, "whole list shrinks to remaining estimates before start")
+        expect(all.applying(.setTodoCompleted(writing.id, true)).applying(.setTodoCompleted(reading.id, true)).focusTarget == .free, "empty list returns to free focus")
+
+        var many = FocusState()
+        for i in 0..<FocusTodo.maximumCount {
+            many = many.applying(.addTodo(FocusTodo(title: "事项 \(i)", minutes: 180)))
+        }
+        expect(many.applying(.addTodo(FocusTodo(title: "超额", minutes: 1))) == many, "bounded list never silently drops existing tasks")
+        let long = many.applying(.selectTarget(.list)).applying(.start, at: start)
+        expect(long.duration == FocusState.maximumPlanDuration, "whole-list sum is not truncated at 180 minutes")
+        expect(long.durationLimit == long.duration, "large-list editor supports its full aggregate duration")
+        try long.validate()
+        let longDone = long.applying(.settle, at: start.addingTimeInterval(long.duration))
+        try longDone.validate()
+        expect(longDone.logs.last?.seconds == long.duration, "long-list completion remains valid")
+        for value in [base, single, adjusted, all, edited, checked, ended, timedOut, longDone] {
+            try value.validate()
+            expect(try JSONDecoder().decode(FocusState.self, from: JSONEncoder().encode(value)) == value, "todo state survives restart")
+        }
+        var malformed = base
+        malformed.todoList?.items[0].minutes = -1
+        do { try malformed.validate(); fatalError("invalid todo accepted") }
+        catch { expect(true, "invalid persisted estimates rejected") }
+        malformed = base
+        malformed.todoList?.items.append(writing)
+        do { try malformed.validate(); fatalError("duplicate persisted ID accepted") }
+        catch { expect(true, "duplicate persisted IDs rejected") }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("afterglow-todos-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = FocusStore(directory: directory)
+        let second = FocusStore(directory: directory)
+        try first.update(.addTodo(writing), at: start)
+        try second.update(.addTodo(reading), at: start)
+        let shared = try first.update(.selectTarget(.list), at: start)
+        expect(shared.todos.count == 2 && shared.duration == 3600, "independent stores merge changes transactionally")
+        try first.update(.start, at: start)
+        try second.update(.deleteTodo(reading.id), at: start.addingTimeInterval(1))
+        expect(try first.snapshot(at: start.addingTimeInterval(2)).deadline == start.addingTimeInterval(3600), "external task edits preserve active deadline")
     }
 }

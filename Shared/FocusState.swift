@@ -18,6 +18,11 @@ public enum FocusAction: Sendable {
     case selectMode(FocusMode)
     case selectDuration(TimeInterval)
     case setTask(String)
+    case addTodo(FocusTodo)
+    case editTodo(UUID, title: String, minutes: Int)
+    case deleteTodo(UUID)
+    case setTodoCompleted(UUID, Bool)
+    case selectTarget(FocusTarget)
 }
 
 public struct FocusLog: Codable, Identifiable, Equatable, Sendable {
@@ -38,6 +43,8 @@ public enum FocusStateError: Error, LocalizedError {
 public struct FocusState: Codable, Equatable, Sendable {
     public static let minimumDuration: TimeInterval = 60
     public static let maximumDuration: TimeInterval = 10_800
+    /// A whole list may exceed the single-task / free-timer limit.
+    public static let maximumPlanDuration = maximumDuration * Double(FocusTodo.maximumCount)
     public static let maximumLogCount = 1_000
 
     public var version: Int
@@ -57,6 +64,10 @@ public struct FocusState: Codable, Equatable, Sendable {
     public var restDuration: TimeInterval
     /// Optional for compatibility with version 1 files written before reminders.
     public var completedNaturally: Bool?
+    /// Absent in older files. Version 2 is written only when a list is changed.
+    public var todoList: FocusTodoList?
+    /// Freeze membership at start; checklist edits never change a running session.
+    public var sessionTodoIDs: [UUID]?
 
     public init(mode: FocusMode = .focus, duration: TimeInterval? = nil, task: String = "") {
         let defaultDuration: TimeInterval = mode == .focus ? 25 * 60 : 5 * 60
@@ -75,12 +86,33 @@ public struct FocusState: Codable, Equatable, Sendable {
         self.focusDuration = mode == .focus ? chosen : 25 * 60
         self.restDuration = mode == .rest ? chosen : 5 * 60
         self.completedNaturally = nil
+        self.todoList = nil
+        self.sessionTodoIDs = nil
     }
 
     public var isActive: Bool { status == .running || status == .paused }
 
     public var currentTask: String {
-        isActive && mode == .focus ? sessionTask ?? task : task
+        mode == .focus && status != .idle ? sessionTask ?? plannedTask : plannedTask
+    }
+
+    public var todos: [FocusTodo] { todoList?.items ?? [] }
+    public var focusTarget: FocusTarget { todoList?.target ?? .free }
+    public var plannedFocusDuration: TimeInterval {
+        guard let list = todoList, !list.selected.isEmpty else { return focusDuration }
+        return list.durationOverride ?? list.estimatedDuration
+    }
+
+    public var plannedTask: String {
+        guard let list = todoList, !list.selected.isEmpty else { return task }
+        if case .todo = list.target { return list.selected[0].title }
+        let summary = "清单 · \(list.selected.count) 项：" + list.selected.map(\.title).joined(separator: "、")
+        return String(summary.prefix(180))
+    }
+
+    public var durationLimit: TimeInterval {
+        mode == .focus && focusTarget != .free
+            ? max(Self.maximumDuration, todoList?.estimatedDuration ?? 0) : Self.maximumDuration
     }
 
     public func remaining(at now: Date) -> TimeInterval {
@@ -104,7 +136,7 @@ public struct FocusState: Codable, Equatable, Sendable {
         case .start:
             // A stale start action must not turn an expired session into a new one.
             guard !expiredWhileRunning, result.status != .running else { return result }
-            if result.status == .done { result.resetTimer(mode: result.mode, duration: result.duration) }
+            if result.status == .done { result.resetTimer(mode: result.mode, duration: result.mode == .focus ? result.plannedFocusDuration : result.restDuration) }
             if result.remaining == 0 {
                 result.end(at: now)
                 return result
@@ -114,8 +146,9 @@ public struct FocusState: Codable, Equatable, Sendable {
             if result.sessionID == nil {
                 result.sessionID = newID
                 result.startedAt = now
-                let name = result.task.trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = result.plannedTask.trimmingCharacters(in: .whitespacesAndNewlines)
                 result.sessionTask = name.isEmpty ? "专注" : String(name.prefix(180))
+                result.sessionTodoIDs = result.mode == .focus ? result.todoList?.selected.map(\.id) : nil
             }
         case .pause:
             guard result.status == .running else { return result }
@@ -127,34 +160,73 @@ public struct FocusState: Codable, Equatable, Sendable {
         case .startNext:
             guard result.status == .done else { return result }
             let next: FocusMode = result.mode == .focus ? .rest : .focus
-            result.resetTimer(mode: next, duration: next == .focus ? result.focusDuration : result.restDuration)
+            result.resetTimer(mode: next, duration: next == .focus ? result.plannedFocusDuration : result.restDuration)
             return result.applying(.start, at: now, sessionID: newID)
         case .reset:
             guard !result.isActive else { return result }
-            result.resetTimer(mode: .focus, duration: result.focusDuration)
+            result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
         case .selectMode(let mode):
             guard !result.isActive, result.mode != mode else { return result }
-            result.resetTimer(mode: mode, duration: mode == .focus ? result.focusDuration : result.restDuration)
+            result.resetTimer(mode: mode, duration: mode == .focus ? result.plannedFocusDuration : result.restDuration)
         case .selectDuration(let duration):
             // Presets are disabled during an active session. Ignore stale button actions too.
-            guard !result.isActive, Self.validDuration(duration) else { return result }
-            if result.mode == .focus { result.focusDuration = duration }
+            guard !result.isActive, duration.isFinite, (Self.minimumDuration...result.durationLimit).contains(duration) else { return result }
+            if result.mode == .focus && result.focusTarget != .free { result.todoList?.durationOverride = duration }
+            else if result.mode == .focus { result.focusDuration = duration }
             else { result.restDuration = duration }
             result.resetTimer(mode: result.mode, duration: duration)
         case .setTask(let task):
             result.task = String(task.prefix(180))
+        case .addTodo(let item):
+            guard item.isValid, result.todos.count < FocusTodo.maximumCount,
+                  !result.todos.contains(where: { $0.id == item.id }) else { return result }
+            result.editList { $0.items.append(item) }
+        case .editTodo(let id, let title, let minutes):
+            guard let index = result.todos.firstIndex(where: { $0.id == id }) else { return result }
+            let item = FocusTodo(id: id, title: title, minutes: minutes, isCompleted: result.todos[index].isCompleted)
+            guard item.isValid else { return result }
+            result.editList { $0.items[index] = item }
+        case .deleteTodo(let id):
+            guard result.todos.contains(where: { $0.id == id }) else { return result }
+            result.editList { $0.items.removeAll { $0.id == id } }
+        case .setTodoCompleted(let id, let completed):
+            guard let index = result.todos.firstIndex(where: { $0.id == id }), result.todos[index].isCompleted != completed else { return result }
+            result.editList { $0.items[index].isCompleted = completed }
+        case .selectTarget(let target):
+            guard !result.isActive else { return result }
+            var list = result.todoList ?? FocusTodoList()
+            list.target = target
+            guard target == .free || !list.selected.isEmpty else { return result }
+            list.durationOverride = nil
+            result.todoList = list
+            result.version = 2
+            result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
         }
         return result
     }
 
     /// Validation happens before disk data can replace the current state. Corruption is not reset silently.
     public func validate() throws {
-        guard version == 1,
-              Self.validDuration(duration), Self.validDuration(focusDuration), Self.validDuration(restDuration),
+        guard (1...2).contains(version),
+              duration.isFinite, (Self.minimumDuration...Self.maximumPlanDuration).contains(duration),
+              Self.validDuration(focusDuration), Self.validDuration(restDuration),
               remaining.isFinite, (0...duration).contains(remaining),
               task.count <= 180, (sessionTask?.count ?? 0) <= 180,
               logs.count <= Self.maximumLogCount,
               Set(logs.map(\.id)).count == logs.count else { throw FocusStateError.invalidData }
+
+        if version == 1 && (todoList != nil || sessionTodoIDs != nil) { throw FocusStateError.invalidData }
+        if let list = todoList {
+            guard list.items.count <= FocusTodo.maximumCount,
+                  list.items.allSatisfy(\.isValid), Set(list.items.map(\.id)).count == list.items.count,
+                  list.target == .free || !list.selected.isEmpty else { throw FocusStateError.invalidData }
+            if let override = list.durationOverride {
+                guard list.target != .free, override.isFinite, (Self.minimumDuration...Self.maximumPlanDuration).contains(override) else { throw FocusStateError.invalidData }
+            }
+        }
+        if let ids = sessionTodoIDs {
+            guard ids.count <= FocusTodo.maximumCount, Set(ids).count == ids.count else { throw FocusStateError.invalidData }
+        }
 
         if isActive {
             guard sessionID != nil, startedAt != nil, sessionTask != nil else { throw FocusStateError.invalidData }
@@ -163,13 +235,13 @@ public struct FocusState: Codable, Equatable, Sendable {
             guard deadline != nil else { throw FocusStateError.invalidData }
         } else if deadline != nil { throw FocusStateError.invalidData }
         if status == .idle {
-            guard remaining == duration, sessionID == nil, startedAt == nil, sessionTask == nil else { throw FocusStateError.invalidData }
+            guard remaining == duration, sessionID == nil, startedAt == nil, sessionTask == nil, sessionTodoIDs == nil else { throw FocusStateError.invalidData }
         }
         if status == .done && remaining != 0 { throw FocusStateError.invalidData }
         if let startedAt, !Self.validDate(startedAt) { throw FocusStateError.invalidData }
         if let deadline, !Self.validDate(deadline) { throw FocusStateError.invalidData }
         for log in logs {
-            guard log.task.count <= 180, log.seconds.isFinite, (0...Self.maximumDuration).contains(log.seconds),
+            guard log.task.count <= 180, log.seconds.isFinite, (0...Self.maximumPlanDuration).contains(log.seconds),
                   Self.validDate(log.startedAt), Self.validDate(log.endedAt) else { throw FocusStateError.invalidData }
         }
     }
@@ -183,6 +255,22 @@ public struct FocusState: Codable, Equatable, Sendable {
         return seconds.isFinite && abs(seconds) <= 8_640_000_000_000
     }
 
+    private mutating func editList(_ edit: (inout FocusTodoList) -> Void) {
+        var list = todoList ?? FocusTodoList()
+        let previousSelection = list.selected
+        edit(&list)
+        list.normalizeSelection()
+        // An estimate override belongs to a particular selection. Editing an
+        // unrelated item leaves it intact; changing its members/estimates resets it.
+        if list.selected.map(\.id) != previousSelection.map(\.id)
+            || list.selected.map(\.minutes) != previousSelection.map(\.minutes) { list.durationOverride = nil }
+        todoList = list
+        version = 2
+        if status == .idle && mode == .focus {
+            resetTimer(mode: .focus, duration: plannedFocusDuration)
+        }
+    }
+
     private mutating func resetTimer(mode: FocusMode, duration: TimeInterval) {
         self.mode = mode
         self.status = .idle
@@ -193,6 +281,7 @@ public struct FocusState: Codable, Equatable, Sendable {
         self.sessionID = nil
         self.sessionTask = nil
         self.completedNaturally = nil
+        self.sessionTodoIDs = nil
     }
 
     private mutating func end(at now: Date) {
