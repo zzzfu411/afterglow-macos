@@ -122,11 +122,9 @@ final class FocusReminders: ObservableObject {
             let shouldAsk = permissionRequested
             permissionRequested = false
             do {
-                if case .schedule = desired {
-                    authorization = await delivery.authorization()
-                } else if shouldAsk {
-                    authorization = await delivery.authorization()
-                }
+                // Settings can change while the timer is idle or paused. This
+                // runs on state/activation events, never on a polling timer.
+                authorization = await delivery.authorization()
                 if shouldAsk, authorization == .unknown {
                     authorization = try await delivery.requestAuthorization() ? .allowed : .denied
                 }
@@ -139,7 +137,7 @@ final class FocusReminders: ObservableObject {
                 case .keep: break
                 }
                 issue = nil
-            } catch { issue = "提醒未开启，请在系统设置中检查。" }
+            } catch { issue = "未能设置到点提醒，请重试。" }
             if current == revision { break }
         }
         worker = nil

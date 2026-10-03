@@ -204,6 +204,19 @@ struct RuntimeTests {
         await backgroundCoordinator.flush()
         expect(backgroundDelivery.permissionRequests == 0 && backgroundDelivery.schedules.isEmpty,
                "background reconciliation never requests unknown permission")
+
+        let idleDelivery = ControlledReminderDelivery()
+        idleDelivery.status = .denied
+        let idleCoordinator = FocusReminders(delivery: idleDelivery)
+        idleCoordinator.reconcile(FocusState())
+        await idleCoordinator.flush()
+        expect(idleCoordinator.authorization == .denied, "idle app shows disabled notifications without starting a timer")
+        idleDelivery.status = .allowed
+        idleCoordinator.reconcile(FocusState())
+        await idleCoordinator.flush()
+        expect(idleCoordinator.authorization == .allowed, "returning from settings refreshes idle authorization")
+        expect(idleDelivery.permissionRequests == 0 && idleDelivery.schedules.isEmpty,
+               "idle permission refresh neither prompts nor schedules")
     }
 
     @MainActor private static func observationTests(_ root: URL) async throws {
@@ -316,6 +329,13 @@ struct RuntimeTests {
         await delay(1.2)
         expect(active.state.status == .paused && active.state.logs.isEmpty, "pausing invalidates the pending deadline callback")
         expect(active.error == nil, "event-driven model completes without storage errors")
+
+        let preserved = try Data(contentsOf: directory.appendingPathComponent("focus-state.json"))
+        try Data("invalid".utf8).write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
+        await waitUntil("unreadable data exposes a recoverable error") { active.error != nil }
+        try preserved.write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
+        active.retryStorage()
+        expect(active.error == nil && active.state.status == .paused, "retry clears the error after storage recovers without resetting the timer")
     }
 
     @MainActor private static func modelReleaseTest(_ root: URL) async throws {

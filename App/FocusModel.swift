@@ -55,7 +55,12 @@ final class FocusModel: ObservableObject {
 
     func refresh(force: Bool = false) {
         do { accept(try store.snapshot(), force: force) }
-        catch { if self.error == nil { self.error = error.localizedDescription } }
+        catch { if self.error == nil { self.error = storageMessage(for: error) } }
+    }
+
+    func retryStorage() {
+        error = nil
+        refresh(force: true)
     }
 
     func send(_ action: FocusAction) {
@@ -66,7 +71,12 @@ final class FocusModel: ObservableObject {
             // Ask once, in context of a start click in the app. Widget intents
             // never show a permission sheet or foreground the app unexpectedly.
             if starting { reminders?.reconcile(updated, requestPermission: true) }
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = storageMessage(for: error) }
+    }
+
+    private func storageMessage(for error: Error) -> String {
+        if error is DecodingError { return "记录文件格式异常，原文件已保留。" }
+        return error.localizedDescription
     }
 
     func performIntent(_ action: IntentAction) async throws {

@@ -19,22 +19,15 @@ struct SmokeApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: FocusWindowLayout.defaultSize.width, height: FocusWindowLayout.defaultSize.height)
         .commands { TimerCommands() }
+        MenuBarExtra {
+            MenuPanel(model: model)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .focusedSceneObject(model)
+        } label: { Image(systemName: "circle.dotted.circle") }
+        .menuBarExtraStyle(.window)
         Settings {
-            if let reminders = model.reminders { SmokeReminderStatus(reminders: reminders, state: model.state) }
+            FocusSettings(model: model, appearance: appearance)
         }
-    }
-}
-
-private struct SmokeReminderStatus: View {
-    @ObservedObject var reminders: FocusReminders
-    let state: FocusState
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Authorization: \(String(describing: reminders.authorization))")
-            Text(reminders.issue ?? "No error")
-            Button("Enable reminders") { reminders.reconcile(state, requestPermission: true) }
-        }
-        .padding(24)
-        .task { await reminders.refreshAuthorization() }
+        .windowResizability(.contentSize)
     }
 }

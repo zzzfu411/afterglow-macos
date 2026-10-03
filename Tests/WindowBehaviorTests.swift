@@ -114,7 +114,7 @@ struct WindowBehaviorTests {
             expect(layout.contentWidth <= size.width - 40, "content keeps horizontal insets at \(size)")
             expect(layout.contentHeight <= size.height - FocusWindowLayout.toolbarHeight, "content fits below toolbar at \(size)")
             expect(layout.timerSize >= 72 && layout.timerSize <= 112, "readout remains within readable scale bounds")
-            expect(layout.contentWidth >= 205, "all three duration buttons fit")
+            expect(layout.contentWidth >= 262, "presets and the editable custom duration fit together")
             // Picker + readout/status + presets + controls + required gaps.
             let fixedControlsHeight: CGFloat = 220
             let requiredHeight = fixedControlsHeight + ceil(layout.timerSize * 1.16)
@@ -122,6 +122,22 @@ struct WindowBehaviorTests {
         }
         expect(FocusWindowLayout(size: CGSize(width: 720, height: 640)).timerSize > FocusWindowLayout(size: minimum).timerSize,
                "enlarging both dimensions enlarges the timer")
+
+        // Static and paused readouts must match the system live timer's format.
+        for (duration, expected) in [(60.0, "1:00"), (1500.0, "25:00"), (3600.0, "1:00:00"),
+                                     (5400.0, "1:30:00"), (10800.0, "3:00:00")] {
+            expect(FocusState(duration: duration).clock() == expected, "consistent duration display: \(expected)")
+        }
+        let startedAt = Date(timeIntervalSince1970: 1_000_000)
+        let longPause = FocusState(duration: 5400).applying(.start, at: startedAt)
+            .applying(.pause, at: startedAt.addingTimeInterval(1))
+        expect(longPause.clock() == "1:29:59", "pausing does not switch hours into total minutes")
+        for (seconds, expected) in [(0.2, "不足 1 秒"), (5.9, "5 秒"), (59.9, "59 秒"),
+                                    (60.0, "1 分"), (61.0, "1 分 1 秒"), (1500.0, "25 分")] {
+            let log = FocusLog(id: UUID(), task: "", startedAt: startedAt,
+                               endedAt: startedAt.addingTimeInterval(seconds), seconds: seconds, completed: false)
+            expect(log.durationLabel == expected, "history does not round up worked time: \(expected)")
+        }
         print("PASS: \(count) window checks; real AppKit/SwiftUI appearance transitions and responsive size bounds.")
     }
 }

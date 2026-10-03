@@ -42,13 +42,27 @@ extension FocusState {
         return status == .running ? "pause.fill" : "play.fill"
     }
     var primaryLabel: String {
-        if status == .done { return mode == .focus ? "休息 \(Int(restDuration / 60)) 分" : "开始专注" }
+        if status == .done { return mode == .focus ? "休息 \(Int(restDuration / 60)) 分" : "专注 \(Int(focusDuration / 60)) 分" }
         return status == .running ? "暂停" : (status == .paused ? "继续" : "开始")
     }
     var primaryAction: FocusAction { status == .done ? .startNext : (status == .running ? .pause : .start) }
     func clock(at date: Date = Date()) -> String {
         let seconds = max(0, Int(ceil(remaining(at: date))))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+        if seconds >= 3600 {
+            return String(format: "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        }
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+extension FocusLog {
+    var durationLabel: String {
+        let wholeSeconds = max(0, Int(seconds.rounded(.down)))
+        if wholeSeconds == 0 { return "不足 1 秒" }
+        let minutes = wholeSeconds / 60
+        let remainder = wholeSeconds % 60
+        if minutes == 0 { return "\(wholeSeconds) 秒" }
+        return remainder == 0 ? "\(minutes) 分" : "\(minutes) 分 \(remainder) 秒"
     }
 }
 

@@ -41,7 +41,7 @@
 | --- | --- |
 | 15 / 25 / 45 分钟专注；5 / 10 / 15 分钟休息 | 可用 |
 | 直接输入 1–180 分钟，回车确认；分别记住专注与休息设置 | 可用 |
-| 开始、暂停、继续、结束与专注记录 | 可用 |
+| 开始、暂停、继续、结束；按实际时长显示专注记录 | 可用 |
 | 结束后一键休息／开始专注、收工 | 可用 |
 | 到点系统提醒与提示音 | 已实现，需通知权限；系统投递待实测 |
 | 菜单栏快捷面板、键盘快捷键 | 已实现 |
@@ -83,7 +83,7 @@ open .build/local/留白.app
 ./scripts/check-native.sh  # SwiftUI / WidgetKit 编译检查
 ```
 
-测试包含 46 项核心断言、6 个进程的 246 次存储事务、75 项原生外观与布局检查，以及 55 项提醒与运行时检查。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 自动检查测试、原生编译和完整 Xcode 构建。详细验证范围见 [QA.md](QA.md)。
+测试包含 46 项核心断言、6 个进程的 246 次存储事务、87 项原生外观、布局与显示检查，以及 60 项提醒与运行时检查。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 自动检查测试、原生编译和完整 Xcode 构建。详细验证范围见 [QA.md](QA.md)。
 
 ```text
 App/       原生窗口、菜单栏与设置

@@ -21,9 +21,14 @@ struct FocusWindow: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
         .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
         .onChange(of: durationPicker.isPresented) { _, presented in model.isEditingDuration = presented }
-        .onDisappear { model.isEditingDuration = false }
-        .alert("无法保存", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
-            Button("好", role: .cancel) { model.error = nil }
+        .onDisappear {
+            durationPicker.isPresented = false
+            model.isEditingDuration = false
+            model.showHistory = false
+        }
+        .alert("计时数据暂不可用", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+            Button("重试") { model.retryStorage() }
+            Button("关闭", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
     }
 
@@ -31,14 +36,15 @@ struct FocusWindow: View {
         HStack(spacing: 8) {
             WindowDragRegion()
                 .accessibilityHidden(true)
+            if let reminders = model.reminders { ReminderIndicator(reminders: reminders) }
             Button { model.showHistory.toggle() } label: {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 13, weight: .regular))
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
-            .help("记录")
-            .accessibilityLabel("记录")
+            .help("专注记录")
+            .accessibilityLabel("专注记录")
             .popover(isPresented: $model.showHistory, arrowEdge: .bottom) {
                 HistoryView(state: model.state)
             }
@@ -99,14 +105,17 @@ struct FocusWindow: View {
                     model.isEditingDuration = true
                     durationPicker.isPresented = true
                 } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 29, height: 29)
-                        .contentShape(Circle())
+                    Label(customDurationSelected ? "\(Int(model.state.duration / 60)) 分" : "自定", systemImage: "pencil")
+                        .font(.system(size: 12, weight: customDurationSelected ? .medium : .regular))
+                        .frame(width: 64, height: 29)
+                        .background(customDurationSelected ? Color.primary.opacity(0.085) : .clear, in: Capsule())
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .help("自定时长")
                 .accessibilityLabel("自定时长")
+                .accessibilityValue("\(Int(model.state.duration / 60)) 分钟")
+                .accessibilityAddTraits(customDurationSelected ? .isSelected : [])
                 .disabled(model.state.isActive)
                 .popover(isPresented: $durationPicker.isPresented, arrowEdge: .bottom) {
                     DurationEditor(picker: durationPicker) { minutes in
@@ -122,6 +131,7 @@ struct FocusWindow: View {
                     .accessibilityHidden(true)
                 Button { model.send(model.state.primaryAction) } label: {
                     TimerSymbol(symbol: model.state.primarySymbol, primary: true, diameter: 56, nativeGlass: true)
+                        .modifier(ControlCaption(text: model.state.status == .done ? model.state.primaryLabel : nil))
                 }
                 .buttonStyle(.plain)
                 .help("\(model.state.primaryLabel)（空格）")
@@ -129,6 +139,7 @@ struct FocusWindow: View {
                 Button { model.send(model.state.status == .done ? .reset : .finish) } label: {
                     TimerSymbol(symbol: model.state.status == .done ? "checkmark" : "stop.fill", diameter: 34, nativeGlass: true)
                         .frame(width: 38, height: 38)
+                        .modifier(ControlCaption(text: model.state.status == .done ? "收工" : nil))
                 }
                 .buttonStyle(.plain)
                 .help(model.state.status == .done ? "收工" : "结束（⌘ .）")
@@ -144,6 +155,10 @@ struct FocusWindow: View {
     }
 
     private func selected(_ minutes: Int) -> Bool { Int(model.state.duration / 60) == minutes }
+
+    private var customDurationSelected: Bool {
+        !model.state.mode.presets.contains(Int(model.state.duration / 60))
+    }
 
     private var statusLine: some View {
         Group {
@@ -195,17 +210,22 @@ struct MenuPanel: View {
                     .help("打开留白").accessibilityLabel("打开留白")
             }
             TimerReadout(state: model.state, size: 58)
+            if model.state.status == .paused {
+                Text("已暂停").font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 16) {
                 Color.clear.frame(width: 40, height: 40)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                 Button { model.send(model.state.primaryAction) } label: {
                     TimerSymbol(symbol: model.state.primarySymbol, primary: true, nativeGlass: true)
+                        .modifier(ControlCaption(text: model.state.status == .done ? model.state.primaryLabel : nil))
                 }
                 .help("\(model.state.primaryLabel)（空格）")
                 .accessibilityLabel(model.state.primaryLabel)
                 Button { model.send(model.state.status == .done ? .reset : .finish) } label: {
                     TimerSymbol(symbol: model.state.status == .done ? "checkmark" : "stop.fill", nativeGlass: true)
+                        .modifier(ControlCaption(text: model.state.status == .done ? "收工" : nil))
                 }
                     .help(model.state.status == .done ? "收工" : "结束（⌘ .）")
                     .accessibilityLabel(model.state.status == .done ? "收工" : "结束")
@@ -213,6 +233,12 @@ struct MenuPanel: View {
                     .opacity(model.state.status == .idle ? 0 : 1)
                     .allowsHitTesting(model.state.status != .idle)
                     .accessibilityHidden(model.state.status == .idle)
+            }
+            if let error = model.error {
+                VStack(spacing: 6) {
+                    Text("计时数据暂不可用").font(.caption).help(error)
+                    Button("重试") { model.retryStorage() }
+                }
             }
         }
         .buttonStyle(.plain)
@@ -226,29 +252,37 @@ struct HistoryView: View {
     let state: FocusState
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("记录").font(.headline)
+            Text("专注记录").font(.headline)
             if state.logs.isEmpty {
-                Label("还没有记录", systemImage: "clock")
+                Label("还没有专注记录", systemImage: "clock")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 80)
             } else {
                 ScrollView {
-                    VStack(spacing: 16) {
-                        ForEach(Array(state.logs.reversed().prefix(30)), id: \.id) { log in
+                    LazyVStack(spacing: 16) {
+                        ForEach(Array(state.logs.reversed()), id: \.id) { log in
                             HStack(spacing: 12) {
                                 Image(systemName: log.completed ? "checkmark.circle" : "circle.lefthalf.filled")
                                     .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(log.task.isEmpty ? "专注" : log.task).lineLimit(1)
                                     Text(log.endedAt, format: .dateTime.month().day().hour().minute())
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Text("\(max(1, Int(ceil(log.seconds / 60)))) 分").monospacedDigit()
+                                Text(log.durationLabel).monospacedDigit().fixedSize()
                             }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isStaticText)
+                            .accessibilityLabel("\(log.task.isEmpty ? "专注" : log.task)，\(log.completed ? "已完成" : "提前结束")，\(log.durationLabel)，\(log.endedAt.formatted(date: .abbreviated, time: .shortened))")
                         }
                     }
                 }.frame(maxHeight: 270)
+                if state.logs.count == FocusState.maximumLogCount {
+                    Text("保留最近 \(FocusState.maximumLogCount) 条")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .font(.system(size: 13))
@@ -262,7 +296,7 @@ private final class DurationPickerState: ObservableObject {
     @Published var text = "25"
 
     var minutes: Int? {
-        guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+        guard let value = Int(text.precomposedStringWithCompatibilityMapping.trimmingCharacters(in: .whitespacesAndNewlines)),
               (1...180).contains(value) else { return nil }
         return value
     }
@@ -297,11 +331,11 @@ private struct DurationEditor: View {
             .font(.system(size: 20, weight: .medium))
             .monospacedDigit()
 
-            if picker.minutes == nil {
-                Text("输入 1–180 的整数")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(picker.minutes == nil ? "输入 1–180 的整数" : "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(height: 14)
+                .accessibilityHidden(picker.minutes != nil)
 
             Button("确定", action: confirm)
                 .keyboardShortcut(.defaultAction)
@@ -331,20 +365,46 @@ struct TimerCommands: Commands {
                 model.send(model.state.primaryAction)
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(model == nil || model?.isEditingDuration == true)
+            .disabled(model == nil || model?.isEditingDuration == true || model?.showHistory == true || model?.error != nil)
             Button("结束") {
                 guard canControlTimer else { return }
                 model?.send(.finish)
             }
             .keyboardShortcut(".", modifiers: .command)
-            .disabled(model?.state.isActive != true || model?.isEditingDuration == true)
+            .disabled(model?.state.isActive != true || model?.isEditingDuration == true || model?.showHistory == true || model?.error != nil)
         }
     }
 
     // A key equivalent can arrive before SwiftUI refreshes the menu's disabled
     // state. Also protect the native field editor at the time of the action.
     private var canControlTimer: Bool {
-        model != nil && model?.isEditingDuration != true
+        model != nil && model?.isEditingDuration != true && model?.showHistory != true && model?.error == nil
             && !(NSApp.keyWindow?.firstResponder is NSTextView)
+    }
+}
+
+private struct ControlCaption: ViewModifier {
+    let text: String?
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .bottom) {
+            if let text {
+                Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize().offset(y: 19).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+private struct ReminderIndicator: View {
+    @ObservedObject var reminders: FocusReminders
+    var body: some View {
+        if reminders.authorization == .denied || reminders.issue != nil {
+            SettingsLink {
+                Image(systemName: "bell.slash")
+                    .frame(width: 28, height: 28).contentShape(Rectangle())
+            }
+            .help("到点提醒不可用，打开设置")
+            .accessibilityLabel("到点提醒不可用，打开设置")
+        }
     }
 }

@@ -35,65 +35,8 @@ struct AfterglowApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            VStack(alignment: .leading, spacing: 20) {
-                Picker("外观", selection: $appearance.selection) {
-                    ForEach(FocusAppearance.allCases, id: \.self) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Divider()
-                if let reminders = model.reminders {
-                    ReminderSettings(reminders: reminders, state: model.state)
-                    Divider()
-                }
-                Label("桌面小组件", systemImage: "rectangle.3.group")
-                    .font(.headline)
-                if model.shared {
-                    Text("右键桌面 → 编辑小组件 → 留白")
-                } else {
-                    Text("本地预览版").foregroundStyle(.secondary)
-                    Text("桌面小组件需完成 Xcode 签名构建。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Divider()
-                LabeledContent("开始 / 暂停", value: "空格")
-                LabeledContent("结束", value: "⌘ .")
-                LabeledContent("数据", value: "仅保存在本机")
-            }
-            .font(.system(size: 13))
-            .padding(28)
-            .frame(width: 370)
-            .foregroundStyle(.primary)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .environment(\.colorScheme, appearance.colorScheme)
+            FocusSettings(model: model, appearance: appearance)
         }
         .windowResizability(.contentSize)
-    }
-}
-
-private struct ReminderSettings: View {
-    @ObservedObject var reminders: FocusReminders
-    let state: FocusState
-
-    var body: some View {
-        HStack {
-            Label("到点提醒", systemImage: "bell")
-            Spacer()
-            if reminders.authorization == .allowed {
-                Text("已开启").foregroundStyle(.secondary)
-            } else if reminders.authorization == .unknown {
-                Button("开启") { reminders.reconcile(state, requestPermission: true) }
-            } else {
-                Text("未开启").foregroundStyle(.secondary)
-            }
-            if reminders.authorization != .unknown {
-                Button("系统设置") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
-                }
-            }
-        }
-        .task { await reminders.refreshAuthorization() }
-        if let issue = reminders.issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
     }
 }

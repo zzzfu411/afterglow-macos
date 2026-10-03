@@ -81,7 +81,7 @@ The first start in the app requests notification permission; Settings also offer
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-Tests cover 46 core assertions, 246 transactions across six concurrent processes, 75 native appearance and layout checks, and 55 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+Tests cover 46 core assertions, 246 transactions across six concurrent processes, 87 native appearance, layout, and display checks, and 60 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
 
 ```text
 App/       Windows, menu bar, and settings
