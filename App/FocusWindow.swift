@@ -95,7 +95,8 @@ struct FocusWindow: View {
                     .accessibilityAddTraits(selected(minutes) ? .isSelected : [])
                 }
                 Button {
-                    durationPicker.minutes = Int(model.state.duration / 60)
+                    durationPicker.text = String(Int(model.state.duration / 60))
+                    model.isEditingDuration = true
                     durationPicker.isPresented = true
                 } label: {
                     Image(systemName: "ellipsis")
@@ -108,19 +109,9 @@ struct FocusWindow: View {
                 .accessibilityLabel("自定时长")
                 .disabled(model.state.isActive)
                 .popover(isPresented: $durationPicker.isPresented, arrowEdge: .bottom) {
-                    VStack(spacing: 18) {
-                        Stepper(value: $durationPicker.minutes, in: 1...180) {
-                            Text("\(durationPicker.minutes) 分钟")
-                                .font(.system(size: 20, weight: .medium)).monospacedDigit()
-                        }
-                        Button("确定") {
-                            model.send(.selectDuration(TimeInterval(durationPicker.minutes * 60)))
-                            durationPicker.isPresented = false
-                        }
-                        .keyboardShortcut(.defaultAction)
+                    DurationEditor(picker: durationPicker) { minutes in
+                        model.send(.selectDuration(TimeInterval(minutes * 60)))
                     }
-                    .padding(22)
-                    .frame(width: 220)
                 }
             }
             .opacity(model.state.isActive ? 0.45 : 1)
@@ -268,5 +259,92 @@ struct HistoryView: View {
 
 private final class DurationPickerState: ObservableObject {
     @Published var isPresented = false
-    @Published var minutes = 25
+    @Published var text = "25"
+
+    var minutes: Int? {
+        guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...180).contains(value) else { return nil }
+        return value
+    }
+}
+
+private struct DurationEditor: View {
+    @ObservedObject var picker: DurationPickerState
+    @SwiftUI.FocusState private var inputFocused: Bool
+    let onConfirm: (Int) -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 8) {
+                TextField("", text: $picker.text)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 74)
+                    .focused($inputFocused)
+                    .onSubmit(confirm)
+                    .accessibilityLabel("自定分钟数")
+                    .help("1–180 分钟")
+                Text("分钟")
+                Stepper("分钟", value: Binding(
+                    get: { picker.minutes ?? 1 },
+                    set: { picker.text = String($0) }
+                ), in: 1...180)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(picker.minutes == nil)
+                .accessibilityLabel("调整分钟数")
+            }
+            .font(.system(size: 20, weight: .medium))
+            .monospacedDigit()
+
+            if picker.minutes == nil {
+                Text("输入 1–180 的整数")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("确定", action: confirm)
+                .keyboardShortcut(.defaultAction)
+                .disabled(picker.minutes == nil)
+        }
+        .padding(22)
+        .frame(width: 230)
+        .defaultFocus($inputFocused, true)
+        .onExitCommand { picker.isPresented = false }
+    }
+
+    private func confirm() {
+        guard picker.isPresented, let minutes = picker.minutes else { return }
+        onConfirm(minutes)
+        picker.isPresented = false
+    }
+}
+
+struct TimerCommands: Commands {
+    // Settings intentionally has no focused timer model.
+    @FocusedObject private var model: FocusModel?
+
+    var body: some Commands {
+        CommandMenu("计时") {
+            Button(model?.state.primaryLabel ?? "开始") {
+                guard let model, canControlTimer else { return }
+                model.send(model.state.primaryAction)
+            }
+            .keyboardShortcut(.space, modifiers: [])
+            .disabled(model == nil || model?.isEditingDuration == true)
+            Button("结束") {
+                guard canControlTimer else { return }
+                model?.send(.finish)
+            }
+            .keyboardShortcut(".", modifiers: .command)
+            .disabled(model?.state.isActive != true || model?.isEditingDuration == true)
+        }
+    }
+
+    // A key equivalent can arrive before SwiftUI refreshes the menu's disabled
+    // state. Also protect the native field editor at the time of the action.
+    private var canControlTimer: Bool {
+        model != nil && model?.isEditingDuration != true
+            && !(NSApp.keyWindow?.firstResponder is NSTextView)
+    }
 }

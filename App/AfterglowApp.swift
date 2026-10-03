@@ -97,23 +97,3 @@ private struct ReminderSettings: View {
         if let issue = reminders.issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
     }
 }
-
-private struct TimerCommands: Commands {
-    // The Settings scene intentionally has no focused timer. Space should
-    // operate its selected control, not start a session behind the window.
-    @FocusedObject private var model: FocusModel?
-
-    var body: some Commands {
-        CommandMenu("计时") {
-            Button(model?.state.primaryLabel ?? "开始") {
-                guard let model else { return }
-                model.send(model.state.primaryAction)
-            }
-            .keyboardShortcut(.space, modifiers: [])
-            .disabled(model == nil || model?.isEditingDuration == true)
-            Button("结束") { model?.send(.finish) }
-                .keyboardShortcut(".", modifiers: .command)
-                .disabled(model?.state.isActive != true || model?.isEditingDuration == true)
-        }
-    }
-}

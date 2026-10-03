@@ -38,7 +38,7 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 | Feature | Status |
 | --- | --- |
 | 15 / 25 / 45-minute focus; 5 / 10 / 15-minute breaks | Available |
-| Custom focus / break durations, 1–180 minutes | Available |
+| Type 1–180 minutes and press Return; focus and break durations remembered separately | Available |
 | Start, pause, resume, finish, and session history | Available |
 | One-click next phase and wrap-up | Available |
 | System completion reminders and sound | Implemented; requires permission; OS delivery not yet verified |

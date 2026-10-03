@@ -13,10 +13,12 @@ struct SmokeApp: App {
         Window("留白 · 检查", id: "main") {
             FocusWindow(model: model)
                 .environment(\.colorScheme, appearance.colorScheme)
+                .focusedSceneObject(model)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: FocusWindowLayout.defaultSize.width, height: FocusWindowLayout.defaultSize.height)
+        .commands { TimerCommands() }
         Settings {
             if let reminders = model.reminders { SmokeReminderStatus(reminders: reminders, state: model.state) }
         }
