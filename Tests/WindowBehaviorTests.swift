@@ -116,7 +116,8 @@ struct WindowBehaviorTests {
             expect(layout.timerSize >= 72 && layout.timerSize <= 112, "readout remains within readable scale bounds")
             expect(layout.contentWidth >= 205, "all three duration buttons fit")
             // Picker + readout/status + presets + controls + required gaps.
-            let requiredHeight = 14 + 24 + 12 + ceil(layout.timerSize * 1.16) + 9 + 18 + 12 + 29 + 22 + 56 + 24
+            let fixedControlsHeight: CGFloat = 220
+            let requiredHeight = fixedControlsHeight + ceil(layout.timerSize * 1.16)
             expect(requiredHeight <= layout.contentHeight, "full control stack fits at \(size)")
         }
         expect(FocusWindowLayout(size: CGSize(width: 720, height: 640)).timerSize > FocusWindowLayout(size: minimum).timerSize,
