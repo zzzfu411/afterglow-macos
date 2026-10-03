@@ -12,6 +12,8 @@ public enum FocusAction: Sendable {
     case start
     case pause
     case finish
+    case startNext
+    case reset
     case settle
     case selectMode(FocusMode)
     case selectDuration(TimeInterval)
@@ -53,6 +55,8 @@ public struct FocusState: Codable, Equatable, Sendable {
     public var logs: [FocusLog]
     public var focusDuration: TimeInterval
     public var restDuration: TimeInterval
+    /// Optional for compatibility with version 1 files written before reminders.
+    public var completedNaturally: Bool?
 
     public init(mode: FocusMode = .focus, duration: TimeInterval? = nil, task: String = "") {
         let defaultDuration: TimeInterval = mode == .focus ? 25 * 60 : 5 * 60
@@ -70,6 +74,7 @@ public struct FocusState: Codable, Equatable, Sendable {
         self.logs = []
         self.focusDuration = mode == .focus ? chosen : 25 * 60
         self.restDuration = mode == .rest ? chosen : 5 * 60
+        self.completedNaturally = nil
     }
 
     public var isActive: Bool { status == .running || status == .paused }
@@ -119,6 +124,14 @@ public struct FocusState: Codable, Equatable, Sendable {
             result.status = .paused
         case .finish:
             result.end(at: now)
+        case .startNext:
+            guard result.status == .done else { return result }
+            let next: FocusMode = result.mode == .focus ? .rest : .focus
+            result.resetTimer(mode: next, duration: next == .focus ? result.focusDuration : result.restDuration)
+            return result.applying(.start, at: now, sessionID: newID)
+        case .reset:
+            guard !result.isActive else { return result }
+            result.resetTimer(mode: .focus, duration: result.focusDuration)
         case .selectMode(let mode):
             guard !result.isActive, result.mode != mode else { return result }
             result.resetTimer(mode: mode, duration: mode == .focus ? result.focusDuration : result.restDuration)
@@ -179,6 +192,7 @@ public struct FocusState: Codable, Equatable, Sendable {
         self.startedAt = nil
         self.sessionID = nil
         self.sessionTask = nil
+        self.completedNaturally = nil
     }
 
     private mutating func end(at now: Date) {
@@ -192,6 +206,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             if logs.count > Self.maximumLogCount { logs.removeFirst(logs.count - Self.maximumLogCount) }
         }
         status = .done
+        completedNaturally = completed
         remaining = 0
         deadline = nil
     }

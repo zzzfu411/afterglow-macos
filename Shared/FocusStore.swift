@@ -88,7 +88,11 @@ public final class FocusStore: @unchecked Sendable {
     public func toggle(at now: Date = Date()) throws -> FocusState {
         try transaction { previous in
             let settled = previous.applying(.settle, at: now)
-            return settled.applying(settled.status == .running ? .pause : .start, at: now)
+            // A click on an expired running widget must settle it, not start the
+            // following phase behind an interface that still showed Pause.
+            if previous.status == .running, settled.status == .done { return settled }
+            let action: FocusAction = settled.status == .running ? .pause : (settled.status == .done ? .startNext : .start)
+            return settled.applying(action, at: now)
         }
     }
 

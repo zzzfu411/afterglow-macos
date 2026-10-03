@@ -31,14 +31,17 @@ A focus timer should ask for little attention. Afterglow keeps time and controls
 - **A few clicks.** Pick a duration and start. Press Space to pause or resume, or use the menu bar panel.
 - **Offline by design.** No accounts, servers, or telemetry. Session history stays on your Mac.
 - **Keeps its place.** Persisted deadlines survive sleep and relaunch. Paused time does not count as focused time.
-- **Small and inspectable.** No third-party runtime dependencies. Source, build scripts, and tests live together.
+- **Quiet in the background.** Event-driven storage and a single deadline wake-up. No idle polling or third-party runtime dependencies. [Measurement notes](docs/PERFORMANCE.md).
 
 ## Features
 
 | Feature | Status |
 | --- | --- |
 | 15 / 25 / 45-minute focus; 5 / 10 / 15-minute breaks | Available |
+| Custom focus / break durations, 1–180 minutes | Available |
 | Start, pause, resume, finish, and session history | Available |
+| One-click next phase and wrap-up | Available |
+| System completion reminders and sound | Implemented; requires permission; OS delivery not yet verified |
 | Menu bar panel and keyboard shortcuts | Implemented |
 | Window materials and appearance switching | Checked on a real Mac |
 | Resizable window and adaptive timer size | Available |
@@ -65,17 +68,20 @@ This builds the app and menu bar panel only. Desktop widgets require full Xcode 
 | `⌘ .` | Finish |
 | `⌘ ,` | Settings |
 
-Local builds are ad-hoc signed. No notarized distribution is available yet. Runtime validation has primarily used Apple Silicon.
+Local builds are ad-hoc signed. No notarized distribution is available yet. Runtime validation has primarily used Apple Silicon. See [packaging and distribution](docs/RELEASING.md).
+
+The first start in the app requests notification permission; Settings also offers an explicit enable action. Pausing or finishing early cancels the reminder. Natural completion leaves delivery to macOS. System notification, Focus, and sound settings affect presentation.
 
 ## Development
 
 ```sh
 ./scripts/test.sh          # Timer transitions, restart, and concurrent storage
 ./scripts/test-window.sh   # Native appearance transitions and layout bounds
+./scripts/test-runtime.sh  # Reminder races, file events, deadlines, no idle polling
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-Tests cover 34 core assertions, 246 transactions across six concurrent processes, and 75 native appearance and layout checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+Tests cover 46 core assertions, 246 transactions across six concurrent processes, 75 native appearance and layout checks, and 55 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
 
 ```text
 App/       Windows, menu bar, and settings

@@ -25,6 +25,8 @@ jobs:
           xcodebuild -version
       - name: Timer and cross-process storage
         run: ./scripts/test.sh
+      - name: Reminders and event-driven runtime
+        run: ./scripts/test-runtime.sh
       - name: Native appearance and responsive layout
         run: ./scripts/test-window.sh
       - name: SwiftUI and WidgetKit compilation

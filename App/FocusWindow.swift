@@ -4,6 +4,7 @@ struct FocusWindow: View {
     @ObservedObject var model: FocusModel
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var durationPicker = DurationPickerState()
 
     var body: some View {
         GeometryReader { geometry in
@@ -19,6 +20,8 @@ struct FocusWindow: View {
         .background(NativeWindowSurface())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
         .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
+        .onChange(of: durationPicker.isPresented) { _, presented in model.isEditingDuration = presented }
+        .onDisappear { model.isEditingDuration = false }
         .alert("无法保存", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("好", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
@@ -69,9 +72,7 @@ struct FocusWindow: View {
             Spacer(minLength: 12)
 
             VStack(spacing: 9) {
-                TimelineView(.periodic(from: Date(), by: 1)) { context in
-                    TimerReadout(state: model.state, size: layout.timerSize, date: context.date, live: false)
-                }
+                TimerReadout(state: model.state, size: layout.timerSize)
                 .frame(height: ceil(layout.timerSize * 1.16))
                 statusLine.frame(height: 18)
             }
@@ -84,7 +85,7 @@ struct FocusWindow: View {
                         Text("\(minutes) 分")
                             .font(.system(size: 12, weight: selected(minutes) ? .medium : .regular))
                             .foregroundStyle(selected(minutes) ? Color.primary : Color.secondary)
-                            .frame(width: 63, height: 29)
+                            .frame(width: 58, height: 29)
                             .background(selected(minutes) ? Color.primary.opacity(0.085) : .clear, in: Capsule())
                             .overlay(Capsule().strokeBorder(Color.primary.opacity(selected(minutes) ? 0.05 : 0), lineWidth: 0.5))
                             .contentShape(Capsule())
@@ -92,6 +93,34 @@ struct FocusWindow: View {
                     .buttonStyle(.plain)
                     .disabled(model.state.isActive)
                     .accessibilityAddTraits(selected(minutes) ? .isSelected : [])
+                }
+                Button {
+                    durationPicker.minutes = Int(model.state.duration / 60)
+                    durationPicker.isPresented = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 29, height: 29)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("自定时长")
+                .accessibilityLabel("自定时长")
+                .disabled(model.state.isActive)
+                .popover(isPresented: $durationPicker.isPresented, arrowEdge: .bottom) {
+                    VStack(spacing: 18) {
+                        Stepper(value: $durationPicker.minutes, in: 1...180) {
+                            Text("\(durationPicker.minutes) 分钟")
+                                .font(.system(size: 20, weight: .medium)).monospacedDigit()
+                        }
+                        Button("确定") {
+                            model.send(.selectDuration(TimeInterval(durationPicker.minutes * 60)))
+                            durationPicker.isPresented = false
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                    .padding(22)
+                    .frame(width: 220)
                 }
             }
             .opacity(model.state.isActive ? 0.45 : 1)
@@ -106,17 +135,17 @@ struct FocusWindow: View {
                 .buttonStyle(.plain)
                 .help("\(model.state.primaryLabel)（空格）")
                 .accessibilityLabel(model.state.primaryLabel)
-                Button { model.send(.finish) } label: {
-                    TimerSymbol(symbol: "stop.fill", diameter: 34, nativeGlass: true)
+                Button { model.send(model.state.status == .done ? .reset : .finish) } label: {
+                    TimerSymbol(symbol: model.state.status == .done ? "checkmark" : "stop.fill", diameter: 34, nativeGlass: true)
                         .frame(width: 38, height: 38)
                 }
                 .buttonStyle(.plain)
-                .help("结束（⌘ .）")
-                .accessibilityLabel("结束")
-                .disabled(!model.state.isActive)
-                .opacity(model.state.isActive ? 1 : 0)
-                .allowsHitTesting(model.state.isActive)
-                .accessibilityHidden(!model.state.isActive)
+                .help(model.state.status == .done ? "收工" : "结束（⌘ .）")
+                .accessibilityLabel(model.state.status == .done ? "收工" : "结束")
+                .disabled(model.state.status == .idle)
+                .opacity(model.state.status == .idle ? 0 : 1)
+                .allowsHitTesting(model.state.status != .idle)
+                .accessibilityHidden(model.state.status == .idle)
             }
             .padding(.top, 22)
             .padding(.bottom, 24)
@@ -136,7 +165,7 @@ struct FocusWindow: View {
                     }
                 }
             case .paused: Text("已暂停")
-            case .done: Label("已结束", systemImage: "checkmark")
+            case .done: Label(model.state.mode == .focus ? "专注结束" : "休息结束", systemImage: "checkmark")
             case .idle: Text("")
             }
         }
@@ -184,18 +213,21 @@ struct MenuPanel: View {
                 }
                 .help("\(model.state.primaryLabel)（空格）")
                 .accessibilityLabel(model.state.primaryLabel)
-                Button { model.send(.finish) } label: { TimerSymbol(symbol: "stop.fill", nativeGlass: true) }
-                    .help("结束（⌘ .）")
-                    .accessibilityLabel("结束")
-                    .disabled(!model.state.isActive)
-                    .opacity(model.state.isActive ? 1 : 0)
-                    .allowsHitTesting(model.state.isActive)
-                    .accessibilityHidden(!model.state.isActive)
+                Button { model.send(model.state.status == .done ? .reset : .finish) } label: {
+                    TimerSymbol(symbol: model.state.status == .done ? "checkmark" : "stop.fill", nativeGlass: true)
+                }
+                    .help(model.state.status == .done ? "收工" : "结束（⌘ .）")
+                    .accessibilityLabel(model.state.status == .done ? "收工" : "结束")
+                    .disabled(model.state.status == .idle)
+                    .opacity(model.state.status == .idle ? 0 : 1)
+                    .allowsHitTesting(model.state.status != .idle)
+                    .accessibilityHidden(model.state.status == .idle)
             }
         }
         .buttonStyle(.plain)
         .padding(24)
         .frame(width: 252)
+        .onAppear { model.refresh() }
     }
 }
 
@@ -232,4 +264,9 @@ struct HistoryView: View {
         .padding(22)
         .frame(width: 290)
     }
+}
+
+private final class DurationPickerState: ObservableObject {
+    @Published var isPresented = false
+    @Published var minutes = 25
 }

@@ -1,45 +1,9 @@
 import SwiftUI
 import WidgetKit
 
-@MainActor
-final class FocusModel: ObservableObject {
-    @Published var state = FocusState()
-    @Published var error: String?
-    @Published var showHistory = false
-    private var poll: Timer?
-    private let store = FocusStore.shared
-
-    var shared: Bool { store.isShared }
-
-    init() {
-        refresh()
-        poll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
-    }
-
-    func refresh() {
-        do {
-            let previousStatus = state.status
-            let updated = try store.snapshot()
-            if updated != state { state = updated }
-            if previousStatus != updated.status, store.isShared { WidgetCenter.shared.reloadAllTimelines() }
-        } catch {
-            if self.error == nil { self.error = error.localizedDescription }
-        }
-    }
-
-    func send(_ action: FocusAction) {
-        do {
-            state = try store.update(action)
-            if store.isShared { WidgetCenter.shared.reloadAllTimelines() }
-        } catch { self.error = error.localizedDescription }
-    }
-}
-
 @main
 struct AfterglowApp: App {
-    @StateObject private var model = FocusModel()
+    @StateObject private var model = FocusModel.shared
     @StateObject private var appearance = FocusAppearanceController(
         selection: FocusAppearance(rawValue: UserDefaults.standard.string(forKey: "afterglow.appearance") ?? "system") ?? .system,
         defaults: .standard
@@ -79,6 +43,10 @@ struct AfterglowApp: App {
                 }
                 .pickerStyle(.segmented)
                 Divider()
+                if let reminders = model.reminders {
+                    ReminderSettings(reminders: reminders, state: model.state)
+                    Divider()
+                }
                 Label("桌面小组件", systemImage: "rectangle.3.group")
                     .font(.headline)
                 if model.shared {
@@ -104,6 +72,32 @@ struct AfterglowApp: App {
     }
 }
 
+private struct ReminderSettings: View {
+    @ObservedObject var reminders: FocusReminders
+    let state: FocusState
+
+    var body: some View {
+        HStack {
+            Label("到点提醒", systemImage: "bell")
+            Spacer()
+            if reminders.authorization == .allowed {
+                Text("已开启").foregroundStyle(.secondary)
+            } else if reminders.authorization == .unknown {
+                Button("开启") { reminders.reconcile(state, requestPermission: true) }
+            } else {
+                Text("未开启").foregroundStyle(.secondary)
+            }
+            if reminders.authorization != .unknown {
+                Button("系统设置") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                }
+            }
+        }
+        .task { await reminders.refreshAuthorization() }
+        if let issue = reminders.issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
+    }
+}
+
 private struct TimerCommands: Commands {
     // The Settings scene intentionally has no focused timer. Space should
     // operate its selected control, not start a session behind the window.
@@ -116,10 +110,10 @@ private struct TimerCommands: Commands {
                 model.send(model.state.primaryAction)
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(model == nil)
+            .disabled(model == nil || model?.isEditingDuration == true)
             Button("结束") { model?.send(.finish) }
                 .keyboardShortcut(".", modifiers: .command)
-                .disabled(model?.state.isActive != true)
+                .disabled(model?.state.isActive != true || model?.isEditingDuration == true)
         }
     }
 }

@@ -37,9 +37,15 @@ extension FocusMode {
 }
 
 extension FocusState {
-    var primarySymbol: String { status == .running ? "pause.fill" : "play.fill" }
-    var primaryLabel: String { status == .running ? "暂停" : (status == .paused ? "继续" : "开始") }
-    var primaryAction: FocusAction { status == .running ? .pause : .start }
+    var primarySymbol: String {
+        if status == .done { return mode == .focus ? "cup.and.saucer" : "play.fill" }
+        return status == .running ? "pause.fill" : "play.fill"
+    }
+    var primaryLabel: String {
+        if status == .done { return mode == .focus ? "休息 \(Int(restDuration / 60)) 分" : "开始专注" }
+        return status == .running ? "暂停" : (status == .paused ? "继续" : "开始")
+    }
+    var primaryAction: FocusAction { status == .done ? .startNext : (status == .running ? .pause : .start) }
     func clock(at date: Date = Date()) -> String {
         let seconds = max(0, Int(ceil(remaining(at: date))))
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)

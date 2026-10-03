@@ -10,6 +10,7 @@ swiftc -swift-version 5 -parse-as-library -O \
   -module-cache-path "$BUILD/module-cache" \
   "$ROOT/Shared/FocusState.swift" "$ROOT/Shared/FocusStore.swift" \
   "$ROOT/Shared/FocusViews.swift" "$ROOT/App/FocusLayout.swift" "$ROOT/App/FocusWindow.swift" "$ROOT/App/NativeMaterial.swift" \
+  "$ROOT/App/FocusModel.swift" "$ROOT/App/FocusReminders.swift" "$ROOT/App/FocusStoreObservation.swift" \
   "$ROOT/App/AfterglowApp.swift" -o "$APP/Contents/MacOS/Afterglow"
 cp "$ROOT/Preview/LocalInfo.plist" "$APP/Contents/Info.plist"
 if [[ -f "$ROOT/Preview/AppIcon.icns" ]]; then

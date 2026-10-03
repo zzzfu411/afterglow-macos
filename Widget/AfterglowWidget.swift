@@ -56,6 +56,9 @@ struct FocusWidgetView: View {
                     if entry.state.isActive {
                         Button(intent: FinishTimerIntent()) { TimerSymbol(symbol: "stop.fill", diameter: 34) }
                             .buttonStyle(.plain).accessibilityLabel("结束")
+                    } else if entry.state.status == .done {
+                        Button(intent: WrapUpTimerIntent()) { TimerSymbol(symbol: "checkmark", diameter: 34) }
+                            .buttonStyle(.plain).accessibilityLabel("收工")
                     } else {
                         Button(intent: RestTimerIntent()) { TimerSymbol(symbol: "cup.and.saucer", diameter: 34) }
                             .buttonStyle(.plain).accessibilityLabel("开始休息")
