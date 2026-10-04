@@ -61,7 +61,7 @@ When built with Xcode 26+, app buttons use Liquid Glass on macOS 26+. Earlier to
 2. Select a task using its circle, title, or Focus button, or choose the whole list. Then start the timer.
 3. Use the task’s `···` menu to mark it done. Undo a mistake immediately, or expand Completed and choose Restore.
 
-A whole-list session is one countdown totaling unfinished estimates. Each estimate is 1–180 minutes, with up to 100 saved items; a whole list can exceed 180 minutes. Adjusting the session timer does not change task estimates. Free focus retains its own duration, and completed items collapse into a separate section. Use the toolbar button or `⌃ ⌘ S` to toggle the sidebar. Editing stays in the sidebar, and hiding it retains an unfinished draft.
+A whole-list session is one countdown totaling unfinished estimates. Each estimate is 1–180 minutes, with up to 100 saved items; a whole list can exceed 180 minutes. Adjusting the session timer does not change task estimates. Free focus retains its own duration, and completed items collapse into a separate section. Use the toolbar button or `⌘ B` to toggle the sidebar. Editing stays in the sidebar, and hiding it retains an unfinished draft.
 
 ## Get started
 
@@ -81,7 +81,7 @@ This builds the app and menu bar panel only. Desktop widgets require full Xcode 
 | `Space` | Start / pause / resume |
 | `⌘ .` | Finish |
 | `⌘ N` | Add a task |
-| `⌃ ⌘ S` | Toggle the task sidebar |
+| `⌘ B` | Toggle the task sidebar |
 | `⌘ ,` | Settings |
 
 Local builds are ad-hoc signed. No notarized distribution is available yet. Runtime validation has primarily used Apple Silicon. See [packaging and distribution](docs/RELEASING.md).

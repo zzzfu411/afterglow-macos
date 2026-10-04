@@ -31,7 +31,7 @@ struct FocusWindow: View {
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button { model.showSidebar.toggle() } label: { Image(systemName: "sidebar.left") }
-                    .help("\(model.showSidebar ? "隐藏" : "显示")待办边栏（⌃⌘S）")
+                    .help("\(model.showSidebar ? "隐藏" : "显示")待办边栏（⌘B）")
                     .accessibilityLabel(model.showSidebar ? "隐藏待办边栏" : "显示待办边栏")
                     .disabled(model.todoToDelete != nil)
             }
@@ -436,7 +436,7 @@ struct TimerCommands: Commands {
         }
         CommandGroup(after: .sidebar) {
             Button(model?.showSidebar == true ? "隐藏待办边栏" : "显示待办边栏") { model?.showSidebar.toggle() }
-                .keyboardShortcut("s", modifiers: [.control, .command])
+                .keyboardShortcut("b", modifiers: .command)
                 .disabled(model == nil || model?.todoToDelete != nil)
         }
         CommandMenu("计时") {

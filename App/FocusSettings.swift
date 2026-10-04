@@ -31,7 +31,7 @@ struct FocusSettings: View {
             LabeledContent("开始 / 暂停", value: "空格")
             LabeledContent("结束", value: "⌘ .")
             LabeledContent("添加待办", value: "⌘ N")
-            LabeledContent("待办边栏", value: "⌃ ⌘ S")
+            LabeledContent("待办边栏", value: "⌘ B")
             LabeledContent("数据", value: "仅保存在本机")
         }
         .font(.system(size: 13))
