@@ -18,8 +18,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>留白检查</string>
 <key>CFBundleExecutable</key><string>AfterglowSmoke</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.4.0</string>
-<key>CFBundleVersion</key><string>7</string>
+<key>CFBundleShortVersionString</key><string>0.4.1</string>
+<key>CFBundleVersion</key><string>8</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

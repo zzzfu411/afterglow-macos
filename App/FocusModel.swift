@@ -9,6 +9,7 @@ final class FocusModel: ObservableObject {
     @Published var showHistory = false
     @Published var showTodos = false
     @Published var todoDraft: TodoDraft?
+    @Published private(set) var completionUndo: FocusTodoCompletionUndo?
     @Published var isEditingDuration = false
     let reminders: FocusReminders?
     private let store: FocusStore
@@ -83,6 +84,26 @@ final class FocusModel: ObservableObject {
         showTodos = true
     }
 
+    func completeTodo(_ id: UUID) {
+        do {
+            let change = try store.completeTodo(id)
+            accept(change.state)
+            if let undo = change.undo { completionUndo = undo }
+        } catch { self.error = storageMessage(for: error) }
+    }
+
+    func undoTodoCompletion() {
+        guard let undo = completionUndo else { return }
+        if send(.undoTodoCompletion(undo)) { completionUndo = nil }
+    }
+
+    @discardableResult func selectFocusTarget(_ target: FocusTarget) -> Bool {
+        guard !state.isActive, send(.selectTarget(target)),
+              state.status == .idle, state.mode == .focus, state.focusTarget == target else { return false }
+        showTodos = false
+        return true
+    }
+
     func saveTodo() {
         guard let draft = todoDraft, let minutes = FocusTodo.parseMinutes(draft.minutes) else { return }
         let item = FocusTodo(id: draft.id, title: draft.title, minutes: minutes)
@@ -123,6 +144,9 @@ final class FocusModel: ObservableObject {
     private func accept(_ updated: FocusState, force: Bool = false) {
         let changed = updated != state
         if changed { state = updated }
+        if let undo = completionUndo, !state.todos.contains(where: { $0.id == undo.item.id && $0.isCompleted }) {
+            completionUndo = nil
+        }
         let nextDeadline = state.status == .running ? state.deadline : nil
         if nextDeadline != scheduledDeadline || force {
             deadlineTimer?.invalidate()

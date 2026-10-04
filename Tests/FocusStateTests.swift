@@ -108,6 +108,7 @@ struct FocusStateTests {
         expect(shared.status == .paused, "246 concurrent toggles remain serialized")
         try shared.validate()
         try testTodos(at: start)
+        try testCompletionUndo(at: start)
         print("PASS: \(count) checks; includes 6 processes / 246 shared-store transactions.")
     }
 
@@ -133,6 +134,7 @@ struct FocusStateTests {
         expect(all.applying(.selectTarget(.free)).duration == 900, "free timer retains separate duration")
         let adjusted = single.applying(.selectDuration(600))
         expect(adjusted.duration == 600 && adjusted.todos[0].minutes == 40 && adjusted.focusDuration == 900, "session override never overwrites estimates or free duration")
+        expect(adjusted.applying(.selectTarget(.todo(writing.id))) == adjusted, "reselecting a task preserves its adjusted time and completion status")
         let renamed = adjusted.applying(.editTodo(writing.id, title: "润色", minutes: 40))
         expect(renamed.duration == 600 && renamed.plannedTask == "润色", "rename retains an explicit time override")
         expect(adjusted.applying(.editTodo(reading.id, title: "另一本", minutes: 30)).duration == 600, "unrelated edit preserves selected override")
@@ -200,5 +202,76 @@ struct FocusStateTests {
         try first.update(.start, at: start)
         try second.update(.deleteTodo(reading.id), at: start.addingTimeInterval(1))
         expect(try first.snapshot(at: start.addingTimeInterval(2)).deadline == start.addingTimeInterval(3600), "external task edits preserve active deadline")
+    }
+
+    static func testCompletionUndo(at start: Date) throws {
+        let writing = FocusTodo(title: "写初稿", minutes: 40)
+        let reading = FocusTodo(title: "读论文", minutes: 20)
+        let base = FocusState(duration: 900).applying(.addTodo(writing)).applying(.addTodo(reading))
+            .applying(.selectTarget(.todo(writing.id))).applying(.selectDuration(600))
+        let completed = base.applying(.setTodoCompleted(writing.id, true), at: start)
+        let undo = FocusTodoCompletionUndo(id: writing.id, previous: base, updated: completed)!
+        let restored = completed.applying(.undoTodoCompletion(undo), at: start)
+        expect(restored == base, "undo recovers selected task and custom duration without replacing history")
+        expect(restored.applying(.undoTodoCompletion(undo), at: start) == restored, "repeat undo is harmless")
+        let renamed = completed.applying(.editTodo(writing.id, title: "新标题", minutes: 50), at: start)
+            .applying(.undoTodoCompletion(undo), at: start)
+        expect(renamed.todos[0].title == "新标题" && renamed.todos[0].minutes == 50 && !renamed.todos[0].isCompleted,
+               "undo restores completion without overwriting later task edits")
+        let switched = completed.applying(.selectTarget(.todo(reading.id))).applying(.selectDuration(420))
+            .applying(.undoTodoCompletion(undo), at: start)
+        expect(switched.focusTarget == .todo(reading.id) && switched.duration == 420 && !switched.todos[0].isCompleted,
+               "undo does not override a subsequently selected task or time")
+        let retimed = completed.applying(.selectDuration(1800)).applying(.undoTodoCompletion(undo), at: start)
+        expect(retimed.focusTarget == .free && retimed.duration == 1800, "undo retains a later free-timer adjustment")
+        let deleted = completed.applying(.deleteTodo(writing.id))
+        expect(deleted.applying(.undoTodoCompletion(undo), at: start) == deleted, "undo never resurrects a deleted task")
+        let nextSession = completed.applying(.start, at: start)
+        let nextRestored = nextSession.applying(.undoTodoCompletion(undo), at: start.addingTimeInterval(10))
+        expect(nextRestored.deadline == nextSession.deadline && nextRestored.sessionTask == nextSession.sessionTask
+               && nextRestored.focusTarget == .free, "undo cannot rewind or relabel a session started after completion")
+
+        let list = base.applying(.selectTarget(.list)).applying(.selectDuration(2700))
+        let listCompleted = list.applying(.setTodoCompleted(writing.id, true), at: start)
+        let listUndo = FocusTodoCompletionUndo(id: writing.id, previous: list, updated: listCompleted)!
+        expect(listCompleted.applying(.undoTodoCompletion(listUndo), at: start) == list, "undo restores whole-list membership and adjusted duration")
+        let sole = FocusState().applying(.addTodo(writing)).applying(.selectTarget(.list))
+        let empty = sole.applying(.setTodoCompleted(writing.id, true))
+        let soleUndo = FocusTodoCompletionUndo(id: writing.id, previous: sole, updated: empty)!
+        expect(empty.applying(.undoTodoCompletion(soleUndo)) == sole, "undo last completion restores whole-list selection")
+
+        for state in [base.applying(.start, at: start),
+                      base.applying(.start, at: start).applying(.pause, at: start.addingTimeInterval(10)),
+                      base.applying(.start, at: start).applying(.finish, at: start.addingTimeInterval(10))] {
+            let checked = state.applying(.setTodoCompleted(writing.id, true), at: start.addingTimeInterval(15))
+            let receipt = FocusTodoCompletionUndo(id: writing.id, previous: state, updated: checked)!
+            let undone = checked.applying(.undoTodoCompletion(receipt), at: start.addingTimeInterval(20))
+            expect(undone == state, "completion undo preserves running, paused and finished session state exactly")
+            try undone.validate()
+        }
+        let running = base.applying(.start, at: start)
+        let checked = running.applying(.setTodoCompleted(writing.id, true), at: start)
+        let receipt = FocusTodoCompletionUndo(id: writing.id, previous: running, updated: checked)!
+        let elapsedUndo = checked.applying(.undoTodoCompletion(receipt), at: start.addingTimeInterval(700))
+        expect(elapsedUndo.status == .done && elapsedUndo.logs.count == 1 && !elapsedUndo.todos[0].isCompleted,
+               "undo at expiry settles the timer once without completing the restored task")
+        try elapsedUndo.validate()
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("afterglow-undo-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = FocusStore(directory: directory)
+        let second = FocusStore(directory: directory)
+        try first.update(.addTodo(writing), at: start)
+        try second.update(.selectTarget(.todo(writing.id)), at: start)
+        let latest = try second.update(.selectDuration(480), at: start)
+        let change = try first.completeTodo(writing.id, at: start)
+        expect(change.undo != nil && change.state.todos[0].isCompleted, "completion persists before returning an undo receipt")
+        expect(try first.update(.undoTodoCompletion(change.undo!), at: start) == latest, "undo receipt captures external edits under the transaction lock")
+        let again = try first.completeTodo(writing.id, at: start)
+        expect(try second.completeTodo(writing.id, at: start).undo == nil, "stale completion produces no misleading undo receipt")
+        let restoredOnRestart = try FocusStore(directory: directory).update(.setTodoCompleted(writing.id, false), at: start)
+        expect(!restoredOnRestart.todos[0].isCompleted && restoredOnRestart.todos[0].title == writing.title,
+               "explicit restore remains available after relaunch without an undo receipt")
+        expect(again.undo != nil, "each real completion can be undone")
     }
 }

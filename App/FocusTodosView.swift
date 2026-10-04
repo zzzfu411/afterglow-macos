@@ -17,6 +17,7 @@ struct FocusTodosView: View {
         }
         .padding(20)
         .frame(width: 340)
+        .onAppear { if pending.isEmpty { viewState.showCompleted = true } }
         .onExitCommand {
             if model.todoDraft != nil { model.todoDraft = nil }
             else { model.showTodos = false }
@@ -51,13 +52,27 @@ struct FocusTodosView: View {
             .disabled(model.state.isActive)
 
             if model.state.isActive {
-                Label("本轮计时中", systemImage: "lock")
+                Label("结束本轮后可更换事项", systemImage: "lock")
                     .font(.caption).foregroundStyle(.secondary)
             } else if model.state.status == .done && !(model.state.sessionTodoIDs ?? []).isEmpty {
-                Text("勾选已完成的事项").font(.caption).foregroundStyle(.secondary)
+                Text("事项右侧 ··· 可标记完成").font(.caption).foregroundStyle(.secondary)
             } else if !pending.isEmpty {
                 Text("\(pending.count) 项 · 预计 \(pending.reduce(0) { $0 + $1.minutes }) 分钟")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            if let undo = model.completionUndo {
+                HStack(spacing: 8) {
+                    Label("已完成：\(undo.item.title)", systemImage: "checkmark")
+                        .lineLimit(1).help(undo.item.title)
+                    Spacer(minLength: 0)
+                    Button("撤销") { model.undoTodoCompletion() }
+                        .buttonStyle(.plain).fontWeight(.medium).foregroundStyle(.primary)
+                        .accessibilityLabel("撤销完成：\(undo.item.title)")
+                }
+                .font(.caption)
+                .padding(10)
+                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
             }
 
             if pending.isEmpty && completed.isEmpty {
@@ -113,55 +128,72 @@ struct FocusTodosView: View {
 
     private func row(_ item: FocusTodo) -> some View {
         let selected = model.state.focusTarget == .todo(item.id)
-        let inSession = model.state.mode == .focus && model.state.status != .idle && (model.state.sessionTodoIDs ?? []).contains(item.id)
         return HStack(spacing: 10) {
-            Button { model.send(.setTodoCompleted(item.id, !item.isCompleted)) } label: {
-                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17, weight: .light))
-                    .foregroundStyle(item.isCompleted ? Color.accentColor : Color.secondary)
-                    .frame(width: 24, height: 32).contentShape(Rectangle())
-            }
-            .accessibilityLabel("\(item.isCompleted ? "恢复待办" : "完成事项")：\(item.title)")
-            .help(item.isCompleted ? "恢复待办" : "标记完成")
-
-            Button { select(.todo(item.id)) } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.title).font(.system(size: 13)).lineLimit(2)
-                        .strikethrough(item.isCompleted)
-                        .foregroundStyle(item.isCompleted ? .secondary : .primary)
-                    HStack(spacing: 5) {
-                        Text("\(item.minutes) 分")
-                        if inSession { Text("· 本轮") }
-                        else if selected { Image(systemName: "checkmark") }
+            if item.isCompleted {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 17)).foregroundStyle(.secondary)
+                    .frame(width: 22).accessibilityHidden(true)
+                itemTitle(item)
+                Button("恢复待办") { model.send(.setTodoCompleted(item.id, false)) }
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.primary)
+                    .fixedSize().frame(minHeight: 32)
+                    .accessibilityLabel("恢复待办：\(item.title)")
+            } else {
+                Button { select(.todo(item.id)) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: selected ? "record.circle" : "circle")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                            .frame(width: 22)
+                        itemTitle(item)
+                        Text(selected ? "已选" : "专注")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary).fixedSize()
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                .contentShape(Rectangle())
+                .disabled(model.state.isActive)
+                .accessibilityLabel("选择专注：\(item.title)，预计 \(item.minutes) 分钟")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .help(model.state.isActive ? "结束本轮后可更换事项" : "选择这项待办，带入预计时长")
             }
-            .disabled(item.isCompleted || model.state.isActive)
-            .accessibilityLabel("专注于：\(item.title)，预计 \(item.minutes) 分钟")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .help(item.title)
 
             Menu {
+                if !item.isCompleted {
+                    Button("标记完成", systemImage: "checkmark") { model.completeTodo(item.id) }
+                    Divider()
+                }
                 Button("编辑") { model.todoDraft = TodoDraft(item: item) }
                 Button("删除…", role: .destructive) { viewState.deleting = item }
             } label: {
-                Image(systemName: "ellipsis").frame(width: 24, height: 28)
+                Label("事项操作：\(item.title)", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly).frame(width: 24, height: 28)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .accessibilityLabel("编辑或删除：\(item.title)")
-            .help("编辑或删除：\(item.title)")
+            .accessibilityLabel("事项操作：\(item.title)")
+            .accessibilityIdentifier("todo-actions-\(item.id.uuidString)")
+            .help(item.isCompleted ? "编辑或删除" : "标记完成、编辑或删除")
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(selected && !item.isCompleted ? Color.primary.opacity(0.055) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .background(selected && !item.isCompleted ? Color.accentColor.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func itemTitle(_ item: FocusTodo) -> some View {
+        let inSession = model.state.mode == .focus && model.state.status != .idle && (model.state.sessionTodoIDs ?? []).contains(item.id)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(item.title).font(.system(size: 13)).lineLimit(2)
+                .strikethrough(item.isCompleted)
+                .foregroundStyle(item.isCompleted ? .secondary : .primary)
+            Text("\(item.minutes) 分\(inSession ? " · 本轮" : "")")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+        .help(item.title)
     }
 
     private func select(_ target: FocusTarget) {
-        guard !model.state.isActive else { return }
-        if model.send(.selectTarget(target)) { model.showTodos = false }
+        model.selectFocusTarget(target)
     }
 }
 

@@ -22,7 +22,33 @@ public enum FocusAction: Sendable {
     case editTodo(UUID, title: String, minutes: Int)
     case deleteTodo(UUID)
     case setTodoCompleted(UUID, Bool)
+    case undoTodoCompletion(FocusTodoCompletionUndo)
     case selectTarget(FocusTarget)
+}
+
+/// One in-memory undo receipt. Never retains history or rewinds the whole state.
+public struct FocusTodoCompletionUndo: Equatable, Sendable {
+    public let item: FocusTodo
+    let previousTarget: FocusTarget
+    let previousDurationOverride: TimeInterval?
+    let completedList: FocusTodoList
+    let mode: FocusMode
+    let status: FocusStatus
+    let sessionID: UUID?
+    let duration: TimeInterval
+
+    init?(id: UUID, previous: FocusState, updated: FocusState) {
+        guard let item = previous.todos.first(where: { $0.id == id }), !item.isCompleted,
+              let list = updated.todoList, list.items.contains(where: { $0.id == id && $0.isCompleted }) else { return nil }
+        self.item = item
+        previousTarget = previous.focusTarget
+        previousDurationOverride = previous.todoList?.durationOverride
+        completedList = list
+        mode = updated.mode
+        status = updated.status
+        sessionID = updated.sessionID
+        duration = updated.duration
+    }
 }
 
 public struct FocusLog: Codable, Identifiable, Equatable, Sendable {
@@ -192,12 +218,28 @@ public struct FocusState: Codable, Equatable, Sendable {
         case .setTodoCompleted(let id, let completed):
             guard let index = result.todos.firstIndex(where: { $0.id == id }), result.todos[index].isCompleted != completed else { return result }
             result.editList { $0.items[index].isCompleted = completed }
+        case .undoTodoCompletion(let undo):
+            guard let index = result.todos.firstIndex(where: { $0.id == undo.item.id && $0.isCompleted }) else { return result }
+            // Restore the old selection only if no subsequent plan/timer edit
+            // superseded it. Always preserve later task edits and active time.
+            let restorePlan = result.todoList == undo.completedList
+                && result.mode == undo.mode && result.status == undo.status
+                && result.sessionID == undo.sessionID && result.duration == undo.duration
+            result.editList { $0.items[index].isCompleted = false }
+            if restorePlan {
+                result.todoList?.target = undo.previousTarget
+                result.todoList?.durationOverride = undo.previousDurationOverride
+                result.todoList?.normalizeSelection()
+                if result.status == .idle && result.mode == .focus {
+                    result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
+                }
+            }
         case .selectTarget(let target):
             guard !result.isActive else { return result }
             var list = result.todoList ?? FocusTodoList()
+            if list.target != target { list.durationOverride = nil }
             list.target = target
             guard target == .free || !list.selected.isEmpty else { return result }
-            list.durationOverride = nil
             result.todoList = list
             result.version = 2
             result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)

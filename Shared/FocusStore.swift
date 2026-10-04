@@ -84,6 +84,18 @@ public final class FocusStore: @unchecked Sendable {
         try transaction { $0.applying(action, at: now) }
     }
 
+    /// Capture the exact change under the same lock as the write, including
+    /// edits another process made before this completion click arrived.
+    public func completeTodo(_ id: UUID, at now: Date = Date()) throws -> (state: FocusState, undo: FocusTodoCompletionUndo?) {
+        var undo: FocusTodoCompletionUndo?
+        let state = try transaction { previous in
+            let updated = previous.applying(.setTodoCompleted(id, true), at: now)
+            undo = FocusTodoCompletionUndo(id: id, previous: previous, updated: updated)
+            return updated
+        }
+        return (state, undo)
+    }
+
     @discardableResult
     public func toggle(at now: Date = Date()) throws -> FocusState {
         try transaction { previous in

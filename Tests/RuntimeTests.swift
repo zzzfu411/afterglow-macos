@@ -310,9 +310,42 @@ struct RuntimeTests {
         active.todoDraft?.title = "编辑后的待办"
         active.saveTodo()
         expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办", "draft edits do not duplicate existing item")
+        active.showTodos = true
+        expect(active.selectFocusTarget(.todo(todo.id)) && !active.showTodos && !active.state.todos[0].isCompleted,
+               "focus selection closes the picker without completing the item")
+        active.send(.selectDuration(480))
+        active.completeTodo(todo.id)
+        expect(active.completionUndo?.item.id == todo.id && active.state.todos[0].isCompleted, "completion exposes a single undo action")
+        try await noPolling(active, directory: directory, label: "idle with completion undo")
+        active.undoTodoCompletion()
+        expect(active.completionUndo == nil && !active.state.todos[0].isCompleted
+               && active.state.focusTarget == .todo(todo.id) && active.state.duration == 480, "model undo restores task selection and adjusted time")
+        active.completeTodo(todo.id)
+        active.showTodos = false
+        active.showTodos = true
+        expect(active.completionUndo != nil, "undo survives accidental popover dismissal")
+        active.send(.setTodoCompleted(todo.id, false))
+        expect(active.completionUndo == nil && !active.state.todos[0].isCompleted, "explicit restore clears stale undo feedback")
+        active.completeTodo(todo.id)
+        let diskFile = directory.appendingPathComponent("focus-state.json")
+        let savedCompletion = try Data(contentsOf: diskFile)
+        try Data("invalid".utf8).write(to: diskFile, options: .atomic)
+        active.undoTodoCompletion()
+        expect(active.error != nil && active.completionUndo != nil && active.state.todos[0].isCompleted,
+               "failed undo keeps its receipt and visible state for retry")
+        try savedCompletion.write(to: diskFile, options: .atomic)
+        active.retryStorage()
+        active.undoTodoCompletion()
+        expect(active.error == nil && active.completionUndo == nil && !active.state.todos[0].isCompleted, "undo can retry safely after storage recovery")
+        active.showTodos = true
+        expect(!active.selectFocusTarget(.todo(UUID())) && active.showTodos, "stale selection cannot dismiss the picker as if it succeeded")
         active.showTodos = false
 
         active.send(.start)
+        active.showTodos = true
+        expect(!active.selectFocusTarget(.todo(todo.id)) && active.showTodos && active.state.status == .running,
+               "active focus selection cannot silently discard the current session")
+        active.showTodos = false
         active.send(.pause)
         expect(active.state.status == .paused, "model pauses the running timer")
         try await noPolling(active, directory: directory, label: "paused")

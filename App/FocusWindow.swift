@@ -218,10 +218,10 @@ struct FocusWindow: View {
             case .done:
                 if model.state.mode == .focus && !(model.state.sessionTodoIDs ?? []).isEmpty {
                     Button { model.showTodos = true } label: {
-                        Label("勾选完成", systemImage: "checklist")
+                        Label("整理待办", systemImage: "checklist")
                     }
                     .buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                    .accessibilityLabel("勾选已完成事项")
+                    .accessibilityLabel("整理本轮待办事项")
                 } else {
                     Label(model.state.mode == .focus ? "专注结束" : "休息结束", systemImage: "checkmark")
                 }
