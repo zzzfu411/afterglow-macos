@@ -6,15 +6,36 @@ struct FocusWindow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var durationPicker = DurationPickerState()
 
+    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { model.showSidebar ? .all : .detailOnly },
+                set: { model.showSidebar = $0 != .detailOnly })
+    }
+
     var body: some View {
-        GeometryReader { geometry in
-            let layout = FocusWindowLayout(size: geometry.size)
-            VStack(spacing: 0) {
-                windowActions
+        NavigationSplitView(columnVisibility: sidebarVisibility) {
+            FocusTodosView(model: model)
+                .navigationSplitViewColumnWidth(min: FocusWindowLayout.sidebarMinimumWidth,
+                                                ideal: FocusWindowLayout.sidebarIdealWidth,
+                                                max: FocusWindowLayout.sidebarMaximumWidth)
+        } detail: {
+            GeometryReader { geometry in
+                let layout = FocusWindowLayout(size: geometry.size)
                 timerContent(layout: layout)
                     .frame(width: layout.contentWidth, height: layout.contentHeight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .toolbar(removing: .sidebarToggle)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { model.showSidebar.toggle() } label: { Image(systemName: "sidebar.left") }
+                    .help("\(model.showSidebar ? "隐藏" : "显示")待办边栏（⌃⌘S）")
+                    .accessibilityLabel(model.showSidebar ? "隐藏待办边栏" : "显示待办边栏")
+                    .disabled(model.todoToDelete != nil)
+            }
+            ToolbarItemGroup(placement: .primaryAction) { windowActions }
         }
         .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
         .background(NativeWindowSurface())
@@ -22,19 +43,19 @@ struct FocusWindow: View {
         .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
         .onChange(of: durationPicker.isPresented) { _, presented in
             model.isEditingDuration = presented
-            if presented { model.showTodos = false; model.showHistory = false }
+            if presented { model.showHistory = false }
         }
-        .onChange(of: model.showTodos) { _, presented in
-            if presented { durationPicker.isPresented = false; model.showHistory = false }
+        .onChange(of: model.todoDraft != nil) { _, editing in
+            if editing { durationPicker.isPresented = false; model.showHistory = false }
         }
         .onChange(of: model.showHistory) { _, presented in
-            if presented { durationPicker.isPresented = false; model.showTodos = false }
+            if presented { durationPicker.isPresented = false }
         }
         .onDisappear {
             durationPicker.isPresented = false
             model.isEditingDuration = false
             model.showHistory = false
-            model.showTodos = false
+            model.todoToDelete = nil
         }
         .alert("计时数据暂不可用", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("重试") { model.retryStorage() }
@@ -43,15 +64,8 @@ struct FocusWindow: View {
     }
 
     private var windowActions: some View {
-        HStack(spacing: 8) {
-            WindowDragRegion()
-                .accessibilityHidden(true)
+        Group {
             if let reminders = model.reminders { ReminderIndicator(reminders: reminders) }
-            Button { model.showTodos.toggle() } label: {
-                Image(systemName: "checklist")
-                    .frame(width: 28, height: 28).contentShape(Rectangle())
-            }
-            .help("待办清单").accessibilityLabel("待办清单")
             Button { model.showHistory.toggle() } label: {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 13, weight: .regular))
@@ -73,9 +87,6 @@ struct FocusWindow: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
-        .frame(height: FocusWindowLayout.toolbarHeight)
     }
 
     private func timerContent(layout: FocusWindowLayout) -> some View {
@@ -92,11 +103,10 @@ struct FocusWindow: View {
 
             Group {
                 if model.state.mode == .focus {
-                    Button { model.showTodos = true } label: {
+                    Button { model.showSidebar = true } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "checklist")
                             Text(model.state.focusTargetTitle).lineLimit(1)
-                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium))
                         }
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                         .padding(.horizontal, 10).frame(height: 28)
@@ -110,9 +120,6 @@ struct FocusWindow: View {
                 }
             }
             .padding(.top, 6)
-            .popover(isPresented: $model.showTodos, arrowEdge: .bottom) {
-                FocusTodosView(model: model)
-            }
 
             Spacer(minLength: 12)
 
@@ -217,7 +224,7 @@ struct FocusWindow: View {
             case .paused: Text("已暂停")
             case .done:
                 if model.state.mode == .focus && !(model.state.sessionTodoIDs ?? []).isEmpty {
-                    Button { model.showTodos = true } label: {
+                    Button { model.showSidebar = true } label: {
                         Label("整理待办", systemImage: "checklist")
                     }
                     .buttonStyle(.plain).foregroundStyle(Color.accentColor)
@@ -231,19 +238,6 @@ struct FocusWindow: View {
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
         .lineLimit(1)
-    }
-}
-
-/// This is only the empty portion of the toolbar; controls retain their normal
-/// click behavior, while the native title bar remains available above it.
-private struct WindowDragRegion: NSViewRepresentable {
-    func makeNSView(context: Context) -> DragView { DragView() }
-    func updateNSView(_ nsView: DragView, context: Context) {}
-
-    final class DragView: NSView {
-        override func mouseDown(with event: NSEvent) {
-            window?.performDrag(with: event)
-        }
     }
 }
 
@@ -267,7 +261,7 @@ struct MenuPanel: View {
                 Button {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
-                    model.showTodos = true
+                    model.showSidebar = true
                 } label: {
                     Label(model.state.focusTargetTitle, systemImage: "checklist")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -433,7 +427,12 @@ struct TimerCommands: Commands {
                 model?.newTodo()
             }
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(model == nil || model?.isEditingDuration == true || model?.error != nil)
+                .disabled(model == nil || model?.isEditingDuration == true || model?.error != nil || model?.todoToDelete != nil)
+        }
+        CommandGroup(after: .sidebar) {
+            Button(model?.showSidebar == true ? "隐藏待办边栏" : "显示待办边栏") { model?.showSidebar.toggle() }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                .disabled(model == nil || model?.todoToDelete != nil)
         }
         CommandMenu("计时") {
             Button(model?.state.primaryLabel ?? "开始") {
@@ -441,20 +440,20 @@ struct TimerCommands: Commands {
                 model.send(model.state.primaryAction)
             }
             .keyboardShortcut(.space, modifiers: [])
-            .disabled(model == nil || model?.isEditingDuration == true || model?.showHistory == true || model?.showTodos == true || model?.error != nil)
+            .disabled(model?.allowsTimerKeyboard != true)
             Button("结束") {
                 guard canControlTimer else { return }
                 model?.send(.finish)
             }
             .keyboardShortcut(".", modifiers: .command)
-            .disabled(model?.state.isActive != true || model?.isEditingDuration == true || model?.showHistory == true || model?.showTodos == true || model?.error != nil)
+            .disabled(model?.state.isActive != true || model?.allowsTimerKeyboard != true)
         }
     }
 
     // A key equivalent can arrive before SwiftUI refreshes the menu's disabled
     // state. Also protect the native field editor at the time of the action.
     private var canControlTimer: Bool {
-        model != nil && model?.isEditingDuration != true && model?.showHistory != true && model?.showTodos != true && model?.error == nil
+        model?.allowsTimerKeyboard == true
             && !(NSApp.keyWindow?.firstResponder is NSTextView)
     }
 }

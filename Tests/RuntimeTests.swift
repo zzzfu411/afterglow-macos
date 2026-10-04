@@ -282,6 +282,7 @@ struct RuntimeTests {
         try write(FocusState(task: "initial"), to: directory)
         let active = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
         expect(active.reminders == nil && active.error == nil, "isolated model avoids the system notification service")
+        expect(active.showSidebar && active.allowsTimerKeyboard, "sidebar is visible by default without disabling timer keys")
         try await noPolling(active, directory: directory, label: "idle")
 
         let writer = try process(arguments: ["--write-task", directory.path, "other-process"])
@@ -296,12 +297,19 @@ struct RuntimeTests {
 
         active.newTodo()
         active.todoDraft?.title = "检查待办"
+        expect(!active.allowsTimerKeyboard, "editing in the sidebar suppresses timer shortcuts")
+        active.showSidebar = false
+        expect(active.allowsTimerKeyboard && active.todoDraft?.title == "检查待办", "collapsing the sidebar retains the draft and frees timer keys")
+        active.newTodo()
+        expect(active.showSidebar && active.todoDraft?.title == "检查待办" && !active.allowsTimerKeyboard,
+               "new-item command reopens an unfinished sidebar draft")
         active.todoDraft?.minutes = "０"
         active.saveTodo()
         expect(active.state.todos.isEmpty && active.todoDraft != nil, "invalid draft cannot save or disappear")
         active.todoDraft?.minutes = "３０"
         active.saveTodo()
         expect(active.state.todos.first?.minutes == 30 && active.todoDraft == nil, "draft saves normalized estimate and clears only on success")
+        expect(active.showSidebar && active.allowsTimerKeyboard, "saving returns to the persistent list with timer keys enabled")
         let todo = active.state.todos[0]
         active.send(.selectTarget(.todo(todo.id)))
         expect(active.state.duration == 1800, "model selects a todo with its estimated deadline")
@@ -310,9 +318,13 @@ struct RuntimeTests {
         active.todoDraft?.title = "编辑后的待办"
         active.saveTodo()
         expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办", "draft edits do not duplicate existing item")
-        active.showTodos = true
-        expect(active.selectFocusTarget(.todo(todo.id)) && !active.showTodos && !active.state.todos[0].isCompleted,
-               "focus selection closes the picker without completing the item")
+        active.showSidebar = true
+        expect(active.selectFocusTarget(.todo(todo.id)) && active.showSidebar && !active.state.todos[0].isCompleted,
+               "focus selection keeps the sidebar open and does not complete the item")
+        active.todoToDelete = todo
+        expect(!active.allowsTimerKeyboard, "delete confirmation blocks timer shortcuts even with a persistent sidebar")
+        active.todoToDelete = nil
+        expect(active.allowsTimerKeyboard, "cancelling deletion restores timer shortcuts")
         active.send(.selectDuration(480))
         active.completeTodo(todo.id)
         expect(active.completionUndo?.item.id == todo.id && active.state.todos[0].isCompleted, "completion exposes a single undo action")
@@ -321,9 +333,9 @@ struct RuntimeTests {
         expect(active.completionUndo == nil && !active.state.todos[0].isCompleted
                && active.state.focusTarget == .todo(todo.id) && active.state.duration == 480, "model undo restores task selection and adjusted time")
         active.completeTodo(todo.id)
-        active.showTodos = false
-        active.showTodos = true
-        expect(active.completionUndo != nil, "undo survives accidental popover dismissal")
+        active.showSidebar = false
+        active.showSidebar = true
+        expect(active.completionUndo != nil, "undo survives sidebar collapse")
         active.send(.setTodoCompleted(todo.id, false))
         expect(active.completionUndo == nil && !active.state.todos[0].isCompleted, "explicit restore clears stale undo feedback")
         active.completeTodo(todo.id)
@@ -337,15 +349,15 @@ struct RuntimeTests {
         active.retryStorage()
         active.undoTodoCompletion()
         expect(active.error == nil && active.completionUndo == nil && !active.state.todos[0].isCompleted, "undo can retry safely after storage recovery")
-        active.showTodos = true
-        expect(!active.selectFocusTarget(.todo(UUID())) && active.showTodos, "stale selection cannot dismiss the picker as if it succeeded")
-        active.showTodos = false
+        active.showSidebar = true
+        expect(!active.selectFocusTarget(.todo(UUID())) && active.showSidebar, "stale selection leaves the sidebar and current plan intact")
+        active.showSidebar = false
 
         active.send(.start)
-        active.showTodos = true
-        expect(!active.selectFocusTarget(.todo(todo.id)) && active.showTodos && active.state.status == .running,
+        active.showSidebar = true
+        expect(!active.selectFocusTarget(.todo(todo.id)) && active.showSidebar && active.state.status == .running,
                "active focus selection cannot silently discard the current session")
-        active.showTodos = false
+        active.showSidebar = false
         active.send(.pause)
         expect(active.state.status == .paused, "model pauses the running timer")
         try await noPolling(active, directory: directory, label: "paused")
@@ -393,6 +405,22 @@ struct RuntimeTests {
         expect(active.error == nil && active.state.status == .paused, "retry clears the error after storage recovers without resetting the timer")
     }
 
+    @MainActor private static func sidebarPreferencesTest(_ root: URL) throws {
+        let suite = "afterglow-sidebar-tests-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = FocusStore(directory: root.appendingPathComponent("sidebar-preferences"))
+        let first = FocusModel(store: store, remindersEnabled: false, preferences: defaults)
+        expect(first.showSidebar, "new installs show the sidebar")
+        let before = try store.snapshot()
+        first.showSidebar = false
+        let reopened = FocusModel(store: store, remindersEnabled: false, preferences: defaults)
+        expect(!reopened.showSidebar, "relaunch remembers a deliberately collapsed sidebar")
+        reopened.newTodo()
+        expect(reopened.showSidebar && defaults.bool(forKey: "afterglow.sidebar-visible"), "add reveals the sidebar and updates its preference")
+        expect(try store.snapshot() == before, "sidebar preferences and draft creation never alter timer data")
+    }
+
     @MainActor private static func modelReleaseTest(_ root: URL) async throws {
         let directory = root.appendingPathComponent("release")
         try write(FocusState(duration: 60, task: "release").applying(.start), to: directory)
@@ -418,6 +446,7 @@ struct RuntimeTests {
                 await reminderTests()
                 try await observationTests(directory)
                 try await modelTests(directory)
+                try sidebarPreferencesTest(directory)
                 try await modelReleaseTest(directory)
             } catch { failure = error }
             finished = true

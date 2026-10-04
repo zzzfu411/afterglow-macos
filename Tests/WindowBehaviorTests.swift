@@ -107,12 +107,14 @@ struct WindowBehaviorTests {
         expect(readback.scheme == scheme(application.effectiveAppearance), "return to inherited appearance reaches content")
 
         let minimum = FocusWindowLayout.minimumSize
-        let sizes = [minimum, FocusWindowLayout.defaultSize, CGSize(width: 720, height: 640),
+        let splitDetail = CGSize(width: FocusWindowLayout.defaultSize.width - FocusWindowLayout.sidebarIdealWidth - 1,
+                                 height: FocusWindowLayout.defaultSize.height)
+        let sizes = [minimum, splitDetail, FocusWindowLayout.defaultSize, CGSize(width: 720, height: 640),
                      CGSize(width: 320, height: 800), CGSize(width: 900, height: minimum.height)]
         for size in sizes {
             let layout = FocusWindowLayout(size: size)
             expect(layout.contentWidth <= size.width - 40, "content keeps horizontal insets at \(size)")
-            expect(layout.contentHeight <= size.height - FocusWindowLayout.toolbarHeight, "content fits below toolbar at \(size)")
+            expect(layout.contentHeight <= size.height, "detail fits beneath the native title bar at \(size)")
             expect(layout.timerSize >= 72 && layout.timerSize <= 112, "readout remains within readable scale bounds")
             expect(layout.contentWidth >= 262, "presets and the editable custom duration fit together")
             // Picker + readout/status + presets + controls + required gaps.

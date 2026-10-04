@@ -3,16 +3,22 @@ import WidgetKit
 
 @MainActor
 final class FocusModel: ObservableObject {
-    static let shared = FocusModel()
+    static let shared = FocusModel(preferences: .standard)
     @Published private(set) var state = FocusState()
     @Published var error: String?
     @Published var showHistory = false
-    @Published var showTodos = false
+    @Published var showSidebar: Bool {
+        didSet {
+            if showSidebar != oldValue { preferences?.set(showSidebar, forKey: "afterglow.sidebar-visible") }
+        }
+    }
     @Published var todoDraft: TodoDraft?
+    @Published var todoToDelete: FocusTodo?
     @Published private(set) var completionUndo: FocusTodoCompletionUndo?
     @Published var isEditingDuration = false
     let reminders: FocusReminders?
     private let store: FocusStore
+    private let preferences: UserDefaults?
     private var deadlineTimer: Timer?
     private var scheduledDeadline: Date?
     private var observation: FocusStoreObservation?
@@ -21,8 +27,10 @@ final class FocusModel: ObservableObject {
 
     var shared: Bool { store.isShared }
 
-    init(store: FocusStore = .shared, remindersEnabled: Bool = true) {
+    init(store: FocusStore = .shared, remindersEnabled: Bool = true, preferences: UserDefaults? = nil) {
         self.store = store
+        self.preferences = preferences
+        showSidebar = preferences?.object(forKey: "afterglow.sidebar-visible") as? Bool ?? true
         reminders = remindersEnabled ? FocusReminders(delivery: SystemReminderDelivery()) : nil
         observeStore()
         refresh(force: true)
@@ -81,7 +89,7 @@ final class FocusModel: ObservableObject {
     func newTodo() {
         if todoDraft == nil { todoDraft = TodoDraft() }
         showHistory = false
-        showTodos = true
+        showSidebar = true
     }
 
     func completeTodo(_ id: UUID) {
@@ -100,8 +108,14 @@ final class FocusModel: ObservableObject {
     @discardableResult func selectFocusTarget(_ target: FocusTarget) -> Bool {
         guard !state.isActive, send(.selectTarget(target)),
               state.status == .idle, state.mode == .focus, state.focusTarget == target else { return false }
-        showTodos = false
         return true
+    }
+
+    /// A persistent sidebar is not a modal. Only editing and confirmations
+    /// suppress timer keys; hiding the sidebar keeps an unfinished draft.
+    var allowsTimerKeyboard: Bool {
+        !isEditingDuration && !showHistory && error == nil && todoToDelete == nil
+            && !(showSidebar && todoDraft != nil)
     }
 
     func saveTodo() {
@@ -166,7 +180,7 @@ final class FocusModel: ObservableObject {
     }
 }
 
-/// Keep an unfinished draft across popover dismissals without persisting keystrokes.
+/// Keep an unfinished draft across sidebar toggles without persisting keystrokes.
 struct TodoDraft {
     var id: UUID = UUID()
     var title = ""

@@ -4,17 +4,21 @@ import Foundation
 /// utility into a full-window dashboard when the window is enlarged.
 struct FocusWindowLayout {
     static let minimumSize = CGSize(width: 320, height: 400)
-    static let defaultSize = CGSize(width: 348, height: 430)
-    static let toolbarHeight: CGFloat = 34
+    static let defaultSize = CGSize(width: 720, height: 480)
+    static let timerReferenceSize = CGSize(width: 348, height: 430)
+    static let sidebarMinimumWidth: CGFloat = 240
+    static let sidebarIdealWidth: CGFloat = 260
+    static let sidebarMaximumWidth: CGFloat = 340
 
     let timerSize: CGFloat
     let contentWidth: CGFloat
     let contentHeight: CGFloat
 
     init(size: CGSize) {
-        let scale = min(size.width / Self.defaultSize.width, size.height / Self.defaultSize.height)
+        let scale = min(size.width / Self.timerReferenceSize.width, size.height / Self.timerReferenceSize.height)
         timerSize = min(112, max(72, 78 * scale))
         contentWidth = min(480, max(0, size.width - 40))
-        contentHeight = min(480, max(0, size.height - Self.toolbarHeight))
+        // The native title-bar toolbar is already outside the detail geometry.
+        contentHeight = min(480, max(0, size.height))
     }
 }

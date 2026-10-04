@@ -5,7 +5,8 @@ import SwiftUI
 struct SmokeApp: App {
     @StateObject private var model = FocusModel(
         store: FocusStore(directory: URL(fileURLWithPath: ProcessInfo.processInfo.environment["AFTERGLOW_SMOKE_DATA"]
-            ?? NSTemporaryDirectory() + "afterglow-smoke-data", isDirectory: true))
+            ?? NSTemporaryDirectory() + "afterglow-smoke-data", isDirectory: true)),
+        preferences: .standard
     )
     @StateObject private var appearance = FocusAppearanceController(selection: .system, defaults: UserDefaults.standard)
 
