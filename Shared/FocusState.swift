@@ -19,7 +19,7 @@ public enum FocusAction: Sendable {
     case selectDuration(TimeInterval)
     case setTask(String)
     case addTodo(FocusTodo)
-    case editTodo(UUID, title: String, minutes: Int)
+    case editTodo(UUID, title: String, minutes: Int, dueDate: Date? = nil)
     case deleteTodo(UUID)
     case setTodoCompleted(UUID, Bool)
     case undoTodoCompletion(FocusTodoCompletionUndo)
@@ -90,7 +90,7 @@ public struct FocusState: Codable, Equatable, Sendable {
     public var restDuration: TimeInterval
     /// Optional for compatibility with version 1 files written before reminders.
     public var completedNaturally: Bool?
-    /// Absent in older files. Version 2 is written only when a list is changed.
+    /// Version 2 adds lists; version 3 adds optional task due dates.
     public var todoList: FocusTodoList?
     /// Freeze membership at start; checklist edits never change a running session.
     public var sessionTodoIDs: [UUID]?
@@ -207,9 +207,9 @@ public struct FocusState: Codable, Equatable, Sendable {
             guard item.isValid, result.todos.count < FocusTodo.maximumCount,
                   !result.todos.contains(where: { $0.id == item.id }) else { return result }
             result.editList { $0.items.append(item) }
-        case .editTodo(let id, let title, let minutes):
+        case .editTodo(let id, let title, let minutes, let dueDate):
             guard let index = result.todos.firstIndex(where: { $0.id == id }) else { return result }
-            let item = FocusTodo(id: id, title: title, minutes: minutes, isCompleted: result.todos[index].isCompleted)
+            let item = FocusTodo(id: id, title: title, minutes: minutes, isCompleted: result.todos[index].isCompleted, dueDate: dueDate)
             guard item.isValid else { return result }
             result.editList { $0.items[index] = item }
         case .deleteTodo(let id):
@@ -241,7 +241,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             list.target = target
             guard target == .free || !list.selected.isEmpty else { return result }
             result.todoList = list
-            result.version = 2
+            result.version = max(result.version, 2)
             result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
         }
         return result
@@ -249,7 +249,7 @@ public struct FocusState: Codable, Equatable, Sendable {
 
     /// Validation happens before disk data can replace the current state. Corruption is not reset silently.
     public func validate() throws {
-        guard (1...2).contains(version),
+        guard (1...3).contains(version),
               duration.isFinite, (Self.minimumDuration...Self.maximumPlanDuration).contains(duration),
               Self.validDuration(focusDuration), Self.validDuration(restDuration),
               remaining.isFinite, (0...duration).contains(remaining),
@@ -262,6 +262,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             guard list.items.count <= FocusTodo.maximumCount,
                   list.items.allSatisfy(\.isValid), Set(list.items.map(\.id)).count == list.items.count,
                   list.target == .free || !list.selected.isEmpty else { throw FocusStateError.invalidData }
+            if version < 3 && list.items.contains(where: { $0.dueDate != nil }) { throw FocusStateError.invalidData }
             if let override = list.durationOverride {
                 guard list.target != .free, override.isFinite, (Self.minimumDuration...Self.maximumPlanDuration).contains(override) else { throw FocusStateError.invalidData }
             }
@@ -304,10 +305,13 @@ public struct FocusState: Codable, Equatable, Sendable {
         list.normalizeSelection()
         // An estimate override belongs to a particular selection. Editing an
         // unrelated item leaves it intact; changing its members/estimates resets it.
-        if list.selected.map(\.id) != previousSelection.map(\.id)
-            || list.selected.map(\.minutes) != previousSelection.map(\.minutes) { list.durationOverride = nil }
+        let estimates = Dictionary(uniqueKeysWithValues: list.selected.map { ($0.id, $0.minutes) })
+        let previousEstimates = Dictionary(uniqueKeysWithValues: previousSelection.map { ($0.id, $0.minutes) })
+        if estimates != previousEstimates { list.durationOverride = nil }
         todoList = list
-        version = 2
+        // Never downgrade after clearing dates: older apps must not silently
+        // erase deadline fields when they write this file.
+        version = max(version, list.items.contains(where: { $0.dueDate != nil }) ? 3 : 2)
         if status == .idle && mode == .focus {
             resetTimer(mode: .focus, duration: plannedFocusDuration)
         }

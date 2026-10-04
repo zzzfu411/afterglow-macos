@@ -307,17 +307,26 @@ struct RuntimeTests {
         active.saveTodo()
         expect(active.state.todos.isEmpty && active.todoDraft != nil, "invalid draft cannot save or disappear")
         active.todoDraft?.minutes = "３０"
+        let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        active.todoDraft?.dueDate = dueDate
         active.saveTodo()
         expect(active.state.todos.first?.minutes == 30 && active.todoDraft == nil, "draft saves normalized estimate and clears only on success")
+        expect(active.state.todos.first?.dueDate == dueDate && active.state.version == 3, "draft persists its optional due date")
         expect(active.showSidebar && active.allowsTimerKeyboard, "saving returns to the persistent list with timer keys enabled")
         let todo = active.state.todos[0]
         active.send(.selectTarget(.todo(todo.id)))
         expect(active.state.duration == 1800, "model selects a todo with its estimated deadline")
         try await noPolling(active, directory: directory, label: "idle with todo list")
         active.todoDraft = TodoDraft(item: todo)
+        expect(active.todoDraft?.dueDate == dueDate, "editing loads the saved due date")
         active.todoDraft?.title = "编辑后的待办"
         active.saveTodo()
         expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办", "draft edits do not duplicate existing item")
+        expect(active.state.todos[0].dueDate == dueDate, "title-only edit retains the deadline")
+        active.todoDraft = TodoDraft(item: active.state.todos[0])
+        active.todoDraft?.dueDate = nil
+        active.saveTodo()
+        expect(active.state.todos[0].dueDate == nil && active.state.version == 3, "draft can clear a deadline without downgrading the file")
         active.showSidebar = true
         expect(active.selectFocusTarget(.todo(todo.id)) && active.showSidebar && !active.state.todos[0].isCompleted,
                "focus selection keeps the sidebar open and does not complete the item")

@@ -29,7 +29,8 @@ Write down a task, estimate its time, and focus. Afterglow connects your checkli
 
 - **At home on Mac.** SwiftUI, AppKit, system materials, SF Pro, and SF Symbols. Dark, light, and automatic appearance.
 - **A few clicks.** Pick a duration and start. Press Space to pause or resume, or use the menu bar panel.
-- **A persistent sidebar.** Resize or collapse the native split view. Selecting a task keeps the list visible; sidebar visibility is remembered.
+- **A compact sidebar.** Resize down to 160 pt or collapse the native split view. Controls adapt to narrow widths, and visibility is remembered.
+- **Upcoming work first.** Optional due dates include a time of day. Dated tasks sort earliest first, with undated tasks below.
 - **From tasks to time.** Choose one item, the whole unfinished list, or free focus. Estimates set the timer; session duration can be adjusted independently.
 - **Completion stays yours.** Select a task to focus, use its menu to mark it done, and undo or restore mistakes. List edits preserve the current countdown and historical names.
 - **Offline by design.** No accounts, servers, or telemetry. Tasks and session history stay on your Mac.
@@ -44,6 +45,7 @@ Write down a task, estimate its time, and focus. Afterglow connects your checkli
 | Type 1–180 minutes and press Return; focus and break durations remembered separately | Available |
 | Resizable, collapsible task sidebar | Available |
 | Tasks with estimates, editing, completion, undo, reopening, and deletion confirmation | Available |
+| Optional due dates and times, with automatic ordering | Available |
 | Single-task, whole-list, or free focus; adjustable session duration | Available |
 | Start, pause, resume, finish, and session history | Available |
 | One-click next phase and wrap-up | Available |
@@ -57,11 +59,13 @@ When built with Xcode 26+, app buttons use Liquid Glass on macOS 26+. Earlier to
 
 ### Start with a task
 
-1. Click `+` in the sidebar or press `⌘ N`. Enter a task and estimated minutes.
+1. Click `+` in the sidebar or press `⌘ N`. Enter a task and estimated minutes, and optionally enable a due date.
 2. Select a task using its circle, title, or Focus button, or choose the whole list. Then start the timer.
 3. Use the task’s `···` menu to mark it done. Undo a mistake immediately, or expand Completed and choose Restore.
 
 A whole-list session is one countdown totaling unfinished estimates. Each estimate is 1–180 minutes, with up to 100 saved items; a whole list can exceed 180 minutes. Adjusting the session timer does not change task estimates. Free focus retains its own duration, and completed items collapse into a separate section. Use the toolbar button or `⌘ B` to toggle the sidebar. Editing stays in the sidebar, and hiding it retains an unfinished draft.
+
+Use a task’s `···` → Edit to change or remove its due date. Equal dates retain insertion order; undated tasks stay below. Due dates organize the list independently of the focus countdown and do not schedule separate alerts.
 
 ## Get started
 
@@ -97,9 +101,9 @@ The first start in the app requests notification permission; Settings also offer
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-Tests cover 115 core assertions, 246 transactions across six concurrent processes, 92 native appearance, layout, and display checks, and 95 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
+Tests cover 135 core assertions, 246 transactions across six concurrent processes, 95 native appearance, layout, and display checks, and 99 reminder/runtime checks. [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) runs tests, native compilation, and a full Xcode build. See [QA.md](QA.md) for validation scope and remaining gaps.
 
-Existing timer data loads directly. The first checklist write upgrades storage to version 2; older apps reject that format instead of silently dropping tasks. Back up your data and use a matching older data file before downgrading.
+Existing data loads without rewriting the checklist. Saving the first task due date upgrades storage to version 3; older apps reject it instead of silently dropping dates. Back up your data and use a matching older data file before downgrading.
 
 ```text
 App/       Windows, menu bar, and settings

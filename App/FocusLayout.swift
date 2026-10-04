@@ -4,11 +4,16 @@ import Foundation
 /// utility into a full-window dashboard when the window is enlarged.
 struct FocusWindowLayout {
     static let minimumSize = CGSize(width: 320, height: 400)
-    static let defaultSize = CGSize(width: 720, height: 480)
+    static let defaultSize = CGSize(width: 620, height: 480)
     static let timerReferenceSize = CGSize(width: 348, height: 430)
-    static let sidebarMinimumWidth: CGFloat = 240
-    static let sidebarIdealWidth: CGFloat = 260
+    static let sidebarMinimumWidth: CGFloat = 160
+    static let sidebarIdealWidth: CGFloat = 210
     static let sidebarMaximumWidth: CGFloat = 340
+
+    /// A restored or user-resized sidebar must leave room for the timer.
+    static func sidebarWidthLimit(windowWidth: CGFloat) -> CGFloat {
+        min(sidebarMaximumWidth, max(sidebarMinimumWidth, windowWidth - minimumSize.width - 1))
+    }
 
     let timerSize: CGFloat
     let contentWidth: CGFloat

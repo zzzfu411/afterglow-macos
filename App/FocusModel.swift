@@ -120,15 +120,15 @@ final class FocusModel: ObservableObject {
 
     func saveTodo() {
         guard let draft = todoDraft, let minutes = FocusTodo.parseMinutes(draft.minutes) else { return }
-        let item = FocusTodo(id: draft.id, title: draft.title, minutes: minutes)
+        let item = FocusTodo(id: draft.id, title: draft.title, minutes: minutes, dueDate: draft.dueDate)
         guard item.isValid else { return }
         if draft.isNew && state.todos.count >= FocusTodo.maximumCount {
             error = "清单最多保留 \(FocusTodo.maximumCount) 项，请先删除不再需要的事项。"
             return
         }
-        let action: FocusAction = draft.isNew ? .addTodo(item) : .editTodo(item.id, title: item.title, minutes: item.minutes)
+        let action: FocusAction = draft.isNew ? .addTodo(item) : .editTodo(item.id, title: item.title, minutes: item.minutes, dueDate: item.dueDate)
         if send(action) {
-            guard state.todos.contains(where: { $0.id == item.id && $0.title == item.title && $0.minutes == item.minutes }) else {
+            guard state.todos.contains(where: { $0.id == item.id && $0.title == item.title && $0.minutes == item.minutes && $0.dueDate == item.dueDate }) else {
                 error = "清单已变化，请关闭编辑后重试。"
                 return
             }
@@ -185,16 +185,21 @@ struct TodoDraft {
     var id: UUID = UUID()
     var title = ""
     var minutes = "25"
+    var dueDate: Date?
     var isNew = true
 
     init(item: FocusTodo? = nil) {
         if let item {
-            id = item.id; title = item.title; minutes = String(item.minutes); isNew = false
+            id = item.id; title = item.title; minutes = String(item.minutes); dueDate = item.dueDate; isNew = false
         }
     }
 
     var isValid: Bool {
         guard let value = FocusTodo.parseMinutes(minutes) else { return false }
-        return FocusTodo(title: title, minutes: value).isValid
+        return FocusTodo(title: title, minutes: value, dueDate: dueDate).isValid
+    }
+
+    static func suggestedDueDate(now: Date = Date(), calendar: Calendar = .current) -> Date {
+        calendar.nextDate(after: now, matching: DateComponents(hour: 18, minute: 0, second: 0), matchingPolicy: .nextTime) ?? now
     }
 }

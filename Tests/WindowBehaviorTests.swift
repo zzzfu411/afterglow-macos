@@ -107,6 +107,13 @@ struct WindowBehaviorTests {
         expect(readback.scheme == scheme(application.effectiveAppearance), "return to inherited appearance reaches content")
 
         let minimum = FocusWindowLayout.minimumSize
+        for width: CGFloat in [481, 620, 900] {
+            let sidebarWidth = FocusWindowLayout.sidebarWidthLimit(windowWidth: width)
+            expect(sidebarWidth >= FocusWindowLayout.sidebarMinimumWidth
+                   && sidebarWidth <= FocusWindowLayout.sidebarMaximumWidth
+                   && width - sidebarWidth - 1 >= minimum.width,
+                   "sidebar resize leaves the full timer visible in a \(width)-point window")
+        }
         let splitDetail = CGSize(width: FocusWindowLayout.defaultSize.width - FocusWindowLayout.sidebarIdealWidth - 1,
                                  height: FocusWindowLayout.defaultSize.height)
         let sizes = [minimum, splitDetail, FocusWindowLayout.defaultSize, CGSize(width: 720, height: 640),

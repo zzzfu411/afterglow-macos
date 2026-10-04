@@ -4,24 +4,25 @@ struct FocusTodosView: View {
     @ObservedObject var model: FocusModel
     @StateObject private var viewState = TodoPanelState()
 
-    private var pending: [FocusTodo] { model.state.todos.filter { !$0.isCompleted } }
+    private var pending: [FocusTodo] { model.state.todoList?.pending ?? [] }
     private var completed: [FocusTodo] { model.state.todos.filter(\.isCompleted) }
 
     var body: some View {
-        Group {
-            if model.todoDraft != nil {
-                VStack(alignment: .leading, spacing: 0) {
-                    TodoEditor(model: model).padding(4)
-                    Spacer(minLength: 0)
+        GeometryReader { geometry in
+            Group {
+                if model.todoDraft != nil {
+                    ScrollView {
+                        TodoEditor(model: model).padding(4)
+                    }
+                } else {
+                    checklist(compact: geometry.size.width < 240)
                 }
-            } else {
-                checklist
             }
+            .padding(.horizontal, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.primary.opacity(0.025))
         .accessibilityIdentifier("todo-sidebar")
         .focusSection()
@@ -38,8 +39,8 @@ struct FocusTodosView: View {
         } message: { Text(model.todoToDelete?.title ?? "") }
     }
 
-    private var checklist: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private func checklist(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("待办").font(.system(size: 15, weight: .semibold))
                 Spacer()
@@ -78,14 +79,14 @@ struct FocusTodosView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(pending) { row($0) }
+                        ForEach(pending) { row($0, compact: compact) }
                         if pending.isEmpty {
                             Label("清单已完成", systemImage: "checkmark.circle")
                                 .foregroundStyle(.secondary).padding(.vertical, 14)
                         }
                         if !completed.isEmpty {
                             DisclosureGroup("已完成（\(completed.count)）", isExpanded: $viewState.showCompleted) {
-                                ForEach(completed) { row($0) }
+                                ForEach(completed) { row($0, compact: compact) }
                             }
                             .font(.callout).foregroundStyle(.secondary)
                             .padding(.top, 10)
@@ -121,13 +122,13 @@ struct FocusTodosView: View {
         let selected = model.state.focusTarget == target
         return Button { select(target) } label: {
             HStack(spacing: 6) {
-                Image(systemName: symbol).frame(width: 22)
-                Text(title)
+                Image(systemName: symbol).frame(width: 18)
+                Text(title).lineLimit(1)
                 Spacer(minLength: 4)
                 if selected { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
             }
             .font(.system(size: 13, weight: selected ? .medium : .regular))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 6)
             .frame(maxWidth: .infinity, minHeight: 32)
             .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
@@ -136,34 +137,41 @@ struct FocusTodosView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func row(_ item: FocusTodo) -> some View {
+    private func row(_ item: FocusTodo, compact: Bool) -> some View {
         let selected = model.state.focusTarget == .todo(item.id)
-        return HStack(spacing: 8) {
+        return HStack(spacing: 4) {
             if item.isCompleted {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 15)).foregroundStyle(.secondary)
-                    .frame(width: 18).accessibilityHidden(true)
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
+                    .frame(width: 16).accessibilityHidden(true)
                 itemTitle(item)
-                Button("恢复待办") { model.send(.setTodoCompleted(item.id, false)) }
+                Button { model.send(.setTodoCompleted(item.id, false)) } label: {
+                    if compact {
+                        Image(systemName: "arrow.uturn.backward").frame(width: 20)
+                    } else { Text("恢复待办") }
+                }
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.primary)
                     .fixedSize().frame(minHeight: 32)
+                    .help("恢复待办")
                     .accessibilityLabel("恢复待办：\(item.title)")
             } else {
                 Button { select(.todo(item.id)) } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Image(systemName: selected ? "record.circle" : "circle")
-                            .font(.system(size: 15, weight: .regular))
+                            .font(.system(size: 14, weight: .regular))
                             .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                            .frame(width: 18)
+                            .frame(width: 16)
                         itemTitle(item)
-                        Text(selected ? "已选" : "专注")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.primary).fixedSize()
+                        if !compact {
+                            Text(selected ? "已选" : "专注")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary).fixedSize()
+                        }
                     }
                     .contentShape(Rectangle())
                 }
                 .disabled(model.state.isActive)
-                .accessibilityLabel("选择专注：\(item.title)，预计 \(item.minutes) 分钟")
+                .accessibilityLabel("选择专注：\(item.title)，预计 \(item.minutes) 分钟\(item.dueDate.map { "，截止 " + $0.formatted(date: .complete, time: .shortened) } ?? "")")
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .accessibilityIdentifier("todo-select-\(item.id.uuidString)")
                 .help(model.state.isActive ? "结束本轮后可更换事项" : "选择这项待办，带入预计时长")
@@ -181,7 +189,7 @@ struct FocusTodosView: View {
             .help(item.isCompleted ? "编辑或删除" : "标记完成、编辑或删除")
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8).padding(.vertical, 5)
+        .padding(.horizontal, 6).padding(.vertical, 5)
         .background(selected && !item.isCompleted ? Color.accentColor.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contextMenu { itemActions(item) }
     }
@@ -203,6 +211,14 @@ struct FocusTodosView: View {
                 .foregroundStyle(item.isCompleted ? .secondary : .primary)
             Text("\(item.minutes) 分\(inSession ? " · 本轮" : "")")
                 .font(.caption).foregroundStyle(.secondary)
+            if let dueDate = item.dueDate {
+                Label {
+                    Text(dueDate, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                } icon: { Image(systemName: "calendar") }
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .help("截止：" + dueDate.formatted(date: .complete, time: .shortened))
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
         .help(item.title)
@@ -218,9 +234,18 @@ private struct TodoEditor: View {
     @SwiftUI.FocusState private var focused: Bool
     private var title: Binding<String> { Binding(get: { model.todoDraft?.title ?? "" }, set: { model.todoDraft?.title = $0 }) }
     private var minutes: Binding<String> { Binding(get: { model.todoDraft?.minutes ?? "" }, set: { model.todoDraft?.minutes = $0 }) }
+    private var hasDueDate: Binding<Bool> {
+        Binding(get: { model.todoDraft?.dueDate != nil }, set: { enabled in
+            model.todoDraft?.dueDate = enabled ? (model.todoDraft?.dueDate ?? TodoDraft.suggestedDueDate()) : nil
+        })
+    }
+    private var dueDate: Binding<Date> {
+        Binding(get: { model.todoDraft?.dueDate ?? TodoDraft.suggestedDueDate() },
+                set: { model.todoDraft?.dueDate = $0 })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             Text(model.todoDraft?.isNew == true ? "添加待办" : "编辑待办").font(.headline)
             VStack(alignment: .leading, spacing: 7) {
                 Text("事项").font(.caption).foregroundStyle(.secondary)
@@ -232,10 +257,22 @@ private struct TodoEditor: View {
                 Text("预计").foregroundStyle(.secondary)
                 TextField("25", text: minutes)
                     .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
-                    .frame(width: 62).monospacedDigit().accessibilityLabel("预计分钟数")
+                    .frame(width: 48).monospacedDigit().accessibilityLabel("预计分钟数")
                     .onSubmit { model.saveTodo() }
                 Text("分钟").foregroundStyle(.secondary)
                 Spacer()
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("截止时间", isOn: hasDueDate).toggleStyle(.checkbox)
+                    .accessibilityIdentifier("todo-due-enabled")
+                if hasDueDate.wrappedValue {
+                    DatePicker("截止日期", selection: dueDate, in: Date.distantPast...Date.distantFuture, displayedComponents: .date)
+                        .datePickerStyle(.field).labelsHidden()
+                        .accessibilityLabel("截止日期").accessibilityIdentifier("todo-due-date")
+                    DatePicker("截止时刻", selection: dueDate, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.field).labelsHidden()
+                        .accessibilityLabel("截止时刻").accessibilityIdentifier("todo-due-time")
+                }
             }
             Text(validationHint).font(.caption).foregroundStyle(.secondary)
                 .frame(height: 15).accessibilityHidden(validationHint.isEmpty)

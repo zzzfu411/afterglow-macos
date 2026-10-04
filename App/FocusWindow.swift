@@ -12,22 +12,26 @@ struct FocusWindow: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: sidebarVisibility) {
-            FocusTodosView(model: model)
-                .toolbar(removing: .sidebarToggle)
-                .navigationSplitViewColumnWidth(min: FocusWindowLayout.sidebarMinimumWidth,
-                                                ideal: FocusWindowLayout.sidebarIdealWidth,
-                                                max: FocusWindowLayout.sidebarMaximumWidth)
-        } detail: {
-            GeometryReader { geometry in
-                let layout = FocusWindowLayout(size: geometry.size)
-                timerContent(layout: layout)
-                    .frame(width: layout.contentWidth, height: layout.contentHeight)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { window in
+            let sidebarLimit = FocusWindowLayout.sidebarWidthLimit(windowWidth: window.size.width)
+            NavigationSplitView(columnVisibility: sidebarVisibility) {
+                FocusTodosView(model: model)
+                    .frame(minWidth: FocusWindowLayout.sidebarMinimumWidth, maxWidth: sidebarLimit)
+                    .toolbar(removing: .sidebarToggle)
+                    .navigationSplitViewColumnWidth(min: FocusWindowLayout.sidebarMinimumWidth,
+                                                    ideal: min(FocusWindowLayout.sidebarIdealWidth, sidebarLimit),
+                                                    max: sidebarLimit)
+            } detail: {
+                GeometryReader { geometry in
+                    let layout = FocusWindowLayout(size: geometry.size)
+                    timerContent(layout: layout)
+                        .frame(width: layout.contentWidth, height: layout.contentHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
             }
-            .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
+            .navigationSplitViewStyle(.balanced)
         }
-        .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button { model.showSidebar.toggle() } label: { Image(systemName: "sidebar.left") }
@@ -40,7 +44,7 @@ struct FocusWindow: View {
         // Restored windows may still have the compact width from before the
         // sidebar existed. Give the window an explicit combined minimum.
         .frame(minWidth: model.showSidebar
-               ? FocusWindowLayout.sidebarIdealWidth + FocusWindowLayout.minimumSize.width + 1
+               ? FocusWindowLayout.sidebarMinimumWidth + FocusWindowLayout.minimumSize.width + 1
                : FocusWindowLayout.minimumSize.width,
                minHeight: FocusWindowLayout.minimumSize.height)
         .background(NativeWindowSurface())

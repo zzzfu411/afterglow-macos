@@ -108,6 +108,7 @@ struct FocusStateTests {
         expect(shared.status == .paused, "246 concurrent toggles remain serialized")
         try shared.validate()
         try testTodos(at: start)
+        try testTodoDueDates(at: start)
         try testCompletionUndo(at: start)
         print("PASS: \(count) checks; includes 6 processes / 246 shared-store transactions.")
     }
@@ -202,6 +203,75 @@ struct FocusStateTests {
         try first.update(.start, at: start)
         try second.update(.deleteTodo(reading.id), at: start.addingTimeInterval(1))
         expect(try first.snapshot(at: start.addingTimeInterval(2)).deadline == start.addingTimeInterval(3600), "external task edits preserve active deadline")
+    }
+
+    static func testTodoDueDates(at start: Date) throws {
+        let undated = FocusTodo(title: "无日期一", minutes: 10)
+        let later = FocusTodo(title: "明天", minutes: 20, dueDate: start.addingTimeInterval(86_400))
+        let early = FocusTodo(title: "今天", minutes: 30, dueDate: start)
+        let tied = FocusTodo(title: "同一截止时间", minutes: 40, dueDate: start)
+        let undatedLast = FocusTodo(title: "无日期二", minutes: 5)
+        let completed = FocusTodo(title: "已完成", minutes: 5, isCompleted: true, dueDate: start.addingTimeInterval(-60))
+        let items = [undated, later, early, tied, undatedLast, completed]
+        let base = items.reduce(FocusState()) { $0.applying(.addTodo($1), at: start) }
+        expect(base.todoList?.pending.map(\.id) == [early.id, tied.id, later.id, undated.id, undatedLast.id],
+               "dated tasks sort earliest first; ties and undated tasks retain insertion order")
+        expect(base.todos.map(\.id) == items.map(\.id), "display sorting never mutates stored order")
+        expect(base.version == 3 && base.deadline == nil && base.status == .idle, "due dates version the file without arming a timer")
+        try base.validate()
+
+        let adjusted = base.applying(.selectTarget(.list)).applying(.selectDuration(600))
+        let reordered = adjusted.applying(.editTodo(later.id, title: later.title, minutes: later.minutes, dueDate: start.addingTimeInterval(-3600)))
+        expect(reordered.todoList?.pending.first?.id == later.id, "editing a due date immediately changes display order")
+        expect(reordered.duration == 600 && reordered.todoList?.durationOverride == 600,
+               "reordering by due date preserves a whole-list custom timer")
+        let cleared = reordered.applying(.editTodo(later.id, title: later.title, minutes: later.minutes))
+        expect(cleared.todos.first(where: { $0.id == later.id })?.dueDate == nil, "due date can be removed")
+        expect(cleared.todoList?.pending.map(\.id) == [early.id, tied.id, undated.id, later.id, undatedLast.id],
+               "removing a date returns the task to stable undated order")
+        let running = adjusted.applying(.start, at: start)
+        let edited = running.applying(.editTodo(later.id, title: later.title, minutes: later.minutes, dueDate: start.addingTimeInterval(-3600)), at: start.addingTimeInterval(1))
+        expect(edited.deadline == running.deadline && edited.sessionTodoIDs == running.sessionTodoIDs
+               && edited.sessionTask == running.sessionTask && edited.logs == running.logs,
+               "deadline sorting during focus does not change the active session or its history")
+
+        let checked = base.applying(.setTodoCompleted(early.id, true), at: start)
+        let undo = FocusTodoCompletionUndo(id: early.id, previous: base, updated: checked)!
+        expect(checked.applying(.undoTodoCompletion(undo), at: start) == base, "completion undo retains the due date and sort position")
+        let newDate = start.addingTimeInterval(7200)
+        let editedCompletion = checked.applying(.editTodo(early.id, title: early.title, minutes: early.minutes, dueDate: newDate))
+        let restored = editedCompletion.applying(.undoTodoCompletion(undo))
+        expect(restored.todos.first(where: { $0.id == early.id })?.dueDate == newDate, "undo preserves a later deadline edit")
+
+        let raw = try JSONSerialization.data(withJSONObject: ["id": undated.id.uuidString, "title": undated.title,
+                                                               "minutes": undated.minutes, "isCompleted": false])
+        let oldItem = try JSONDecoder().decode(FocusTodo.self, from: raw)
+        expect(oldItem == undated && oldItem.dueDate == nil, "legacy items without dueDate decode without migration")
+        for date in [Date(timeIntervalSince1970: .infinity), Date(timeIntervalSince1970: .nan), Date.distantFuture.addingTimeInterval(60)] {
+            expect(base.applying(.addTodo(FocusTodo(title: "无效日期", minutes: 5, dueDate: date))) == base,
+                   "invalid or out-of-range dates cannot enter storage")
+        }
+        var invalidVersion = base
+        invalidVersion.version = 2
+        do { try invalidVersion.validate(); fatalError("unversioned due date accepted") }
+        catch { expect(true, "deadline data must use version 3 so older apps reject it") }
+        let allCleared = base.todos.reduce(base) { $0.applying(.editTodo($1.id, title: $1.title, minutes: $1.minutes)) }
+        expect(allCleared.version == 3 && allCleared.todos.allSatisfy { $0.dueDate == nil }, "clearing all dates never downgrades the file")
+        expect(allCleared.applying(.selectTarget(.free)).version == 3, "selection cannot downgrade a deadline file")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("afterglow-due-dates-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FocusStore(directory: directory)
+        try store.update(.addTodo(undated), at: start)
+        let file = directory.appendingPathComponent("focus-state.json")
+        let legacyBytes = try Data(contentsOf: file)
+        _ = try store.snapshot(at: start)
+        expect(try Data(contentsOf: file) == legacyBytes, "reading a legacy list does not rewrite user data")
+        try store.update(.addTodo(later), at: start)
+        let reopened = try FocusStore(directory: directory).snapshot(at: start)
+        expect(reopened.todos.last?.dueDate == later.dueDate && reopened.version == 3, "due dates survive a store relaunch")
+        try store.update(.editTodo(later.id, title: later.title, minutes: later.minutes), at: start)
+        expect(try FocusStore(directory: directory).snapshot(at: start).todos.last?.dueDate == nil, "cleared dates stay cleared after relaunch")
     }
 
     static func testCompletionUndo(at start: Date) throws {
