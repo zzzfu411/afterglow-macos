@@ -14,6 +14,7 @@ struct FocusWindow: View {
     var body: some View {
         NavigationSplitView(columnVisibility: sidebarVisibility) {
             FocusTodosView(model: model)
+                .toolbar(removing: .sidebarToggle)
                 .navigationSplitViewColumnWidth(min: FocusWindowLayout.sidebarMinimumWidth,
                                                 ideal: FocusWindowLayout.sidebarIdealWidth,
                                                 max: FocusWindowLayout.sidebarMaximumWidth)
@@ -27,7 +28,6 @@ struct FocusWindow: View {
             .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
         }
         .navigationSplitViewStyle(.balanced)
-        .toolbar(removing: .sidebarToggle)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button { model.showSidebar.toggle() } label: { Image(systemName: "sidebar.left") }
@@ -37,7 +37,12 @@ struct FocusWindow: View {
             }
             ToolbarItemGroup(placement: .primaryAction) { windowActions }
         }
-        .frame(minWidth: FocusWindowLayout.minimumSize.width, minHeight: FocusWindowLayout.minimumSize.height)
+        // Restored windows may still have the compact width from before the
+        // sidebar existed. Give the window an explicit combined minimum.
+        .frame(minWidth: model.showSidebar
+               ? FocusWindowLayout.sidebarIdealWidth + FocusWindowLayout.minimumSize.width + 1
+               : FocusWindowLayout.minimumSize.width,
+               minHeight: FocusWindowLayout.minimumSize.height)
         .background(NativeWindowSurface())
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.state.status)
         .onChange(of: phase) { _, phase in if phase == .active { model.refresh() } }
