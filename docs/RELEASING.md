@@ -15,10 +15,10 @@
 
 ```sh
 ./scripts/build-local.sh
-./scripts/package-release.sh preview ".build/local/留白.app"
+./scripts/package-release.sh preview ".build/local/Moro.app"
 ```
 
-输出示例：`.build/packages/Afterglow-0.3.0-build4-arm64-preview.zip`。脚本从实际 bundle 读取版本、构建号和架构，不把单架构构建标成 Universal。ZIP 内保留原来的应用名。
+输出示例：`.build/packages/Moro-0.6.1-build12-arm64-preview.zip`。脚本从实际 bundle 读取版本、构建号和架构，不把单架构构建标成 Universal。ZIP 内保留原来的应用名。
 
 预览模式会检查代码签名完整性，但不联系 Apple 公证服务。下载到另一台 Mac 后仍可能被 Gatekeeper 阻止；预览包不是面向普通用户的安装体验，不应附带关闭系统保护的步骤。
 
@@ -36,7 +36,7 @@
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   ./scripts/package-release.sh release \
-  "/path/to/export/Afterglow.app" \
+  "/path/to/export/Moro.app" \
   YOURTEAMID \
   afterglow-notary
 ```

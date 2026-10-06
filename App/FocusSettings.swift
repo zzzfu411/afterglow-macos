@@ -19,7 +19,7 @@ struct FocusSettings: View {
             }
             Label("桌面小组件", systemImage: "rectangle.3.group").font(.headline)
             if model.shared {
-                Text("右键桌面 → 编辑小组件 → 留白")
+                Text("右键桌面 → 编辑小组件 → Moro")
             } else {
                 HStack {
                     Text("此版本暂不可用").foregroundStyle(.secondary)

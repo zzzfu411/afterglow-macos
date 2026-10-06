@@ -7,6 +7,8 @@ import plistlib
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / 'Afterglow.xcodeproj'
 PROJECT.mkdir(exist_ok=True)
+# Keep target IDs, bundle identifiers and signing configuration stable on rename.
+PRODUCT_NAMES = {'Afterglow': 'Moro', 'AfterglowWidgets': 'MoroWidgets'}
 
 def uid(name):
     return hashlib.sha256(name.encode()).hexdigest()[:24].upper()
@@ -35,7 +37,7 @@ for path in shared + app + intent + widget + metadata:
     obj(path, 'PBXFileReference', f'lastKnownFileType = {kind}; path = {q(path)}; sourceTree = SOURCE_ROOT;')
 
 for name, extension, filetype in [('Afterglow', 'app', 'wrapper.application'), ('AfterglowWidgets', 'appex', 'wrapper.app-extension')]:
-    obj(name + '-product', 'PBXFileReference', f'explicitFileType = {filetype}; includeInIndex = 0; path = {name}.{extension}; sourceTree = BUILT_PRODUCTS_DIR;')
+    obj(name + '-product', 'PBXFileReference', f'explicitFileType = {filetype}; includeInIndex = 0; path = {PRODUCT_NAMES[name]}.{extension}; sourceTree = BUILT_PRODUCTS_DIR;')
 
 obj('sources-group', 'PBXGroup', f'name = Sources; children = {refs(shared + app + intent + widget)}; sourceTree = "<group>";')
 obj('config-group', 'PBXGroup', f'name = Configuration; children = {refs(metadata)}; sourceTree = "<group>";')
@@ -79,11 +81,11 @@ for target in ['project', 'Afterglow', 'AfterglowWidgets']:
         else:
             is_widget = target == 'AfterglowWidgets'
             settings.update({
-                'PRODUCT_NAME': target, 'PRODUCT_BUNDLE_IDENTIFIER': 'app.afterglow.mac.widgets' if is_widget else 'app.afterglow.mac',
+                'PRODUCT_NAME': PRODUCT_NAMES[target], 'PRODUCT_BUNDLE_IDENTIFIER': 'app.afterglow.mac.widgets' if is_widget else 'app.afterglow.mac',
                 'INFOPLIST_FILE': 'Widget/Info.plist' if is_widget else 'App/Info.plist',
                 'CODE_SIGN_ENTITLEMENTS': 'Config/Widget.entitlements' if is_widget else 'Config/App.entitlements',
                 'GENERATE_INFOPLIST_FILE': 'NO', 'ENABLE_APP_SANDBOX': 'YES', 'ENABLE_HARDENED_RUNTIME': 'YES',
-                'CURRENT_PROJECT_VERSION': '11', 'MARKETING_VERSION': '0.6.0',
+                'CURRENT_PROJECT_VERSION': '12', 'MARKETING_VERSION': '0.6.1',
                 'SWIFT_ACTIVE_COMPILATION_CONDITIONS': 'AFTERGLOW_WIDGET' if is_widget else '',
                 'LD_RUNPATH_SEARCH_PATHS': '$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks' if is_widget else '$(inherited) @executable_path/../Frameworks',
                 'SKIP_INSTALL': 'YES' if is_widget else 'NO',
@@ -98,7 +100,7 @@ for target in ['Afterglow', 'AfterglowWidgets']:
     if target == 'Afterglow': phases.append('embed-phase')
     deps = refs(['widget-dependency']) if target == 'Afterglow' else '()'
     typ = 'com.apple.product-type.application' if target == 'Afterglow' else 'com.apple.product-type.app-extension'
-    obj(target + '-target', 'PBXNativeTarget', f'buildConfigurationList = {uid(target + "-config-list")}; buildPhases = {refs(phases)}; buildRules = (); dependencies = {deps}; name = {target}; productName = {target}; productReference = {uid(target + "-product")}; productType = {q(typ)};')
+    obj(target + '-target', 'PBXNativeTarget', f'buildConfigurationList = {uid(target + "-config-list")}; buildPhases = {refs(phases)}; buildRules = (); dependencies = {deps}; name = {target}; productName = {PRODUCT_NAMES[target]}; productReference = {uid(target + "-product")}; productType = {q(typ)};')
 
 attrs = ' '.join(f'{uid(t + "-target")} = {{CreatedOnToolsVersion = 16.0; ProvisioningStyle = Automatic; SystemCapabilities = {{com.apple.ApplicationGroups.Mac = {{enabled = 1; }}; com.apple.Sandbox = {{enabled = 1; }}; }}; }};' for t in ['Afterglow', 'AfterglowWidgets'])
 obj('project', 'PBXProject', f'attributes = {{BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {{{attrs}}}; }}; buildConfigurationList = {uid("project-config-list")}; compatibilityVersion = "Xcode 14.0"; developmentRegion = "zh-Hans"; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", en, Base, ); mainGroup = {uid("root-group")}; productRefGroup = {uid("products-group")}; projectDirPath = ""; projectRoot = ""; targets = {refs(["Afterglow-target", "AfterglowWidgets-target"])};')
@@ -106,7 +108,7 @@ obj('project', 'PBXProject', f'attributes = {{BuildIndependentTargetsInParallel 
 (PROJECT / 'project.pbxproj').write_text('// !$*UTF8*$!\n{\n\tarchiveVersion = 1;\n\tclasses = {};\n\tobjectVersion = 56;\n\tobjects = {\n' + '\n'.join(objects) + f'\n\t}};\n\trootObject = {uid("project")};\n}}\n')
 scheme_dir = PROJECT / 'xcshareddata/xcschemes'
 scheme_dir.mkdir(parents=True, exist_ok=True)
-reference = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{uid("Afterglow-target")}" BuildableName="Afterglow.app" BlueprintName="Afterglow" ReferencedContainer="container:Afterglow.xcodeproj"/>'
+reference = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{uid("Afterglow-target")}" BuildableName="Moro.app" BlueprintName="Afterglow" ReferencedContainer="container:Afterglow.xcodeproj"/>'
 (scheme_dir / 'Afterglow.xcscheme').write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="1600" version="1.3">
   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">{reference}</BuildActionEntry></BuildActionEntries></BuildAction>

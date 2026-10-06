@@ -11,7 +11,7 @@ struct SmokeApp: App {
     @StateObject private var appearance = FocusAppearanceController(selection: .system, defaults: UserDefaults.standard)
 
     var body: some Scene {
-        Window("留白 · 检查", id: "main") {
+        Window("Moro · 检查", id: "main") {
             FocusWindow(model: model)
                 .environment(\.colorScheme, appearance.colorScheme)
                 .focusedSceneObject(model)

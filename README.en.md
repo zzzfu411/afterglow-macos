@@ -1,6 +1,6 @@
-<p align="center"><img src="docs/assets/icon.png" width="96" alt="Afterglow icon" /></p>
+<p align="center"><img src="docs/assets/icon.png" width="96" alt="Moro icon" /></p>
 
-<h1 align="center">Afterglow · 留白</h1>
+<h1 align="center">Moro</h1>
 
 <p align="center">Turn a to-do into focused time. Native macOS, offline, quiet.</p>
 
@@ -23,9 +23,9 @@
 
 > **Early preview:** the native app runs locally. Both app and widget pass a full Xcode build; signed installation and on-desktop interactions still need validation.
 
-## Why Afterglow
+## Why Moro
 
-Write down a task, estimate its time, and focus. Afterglow connects your checklist, timer, and session history with tasks on the left and a quiet timer on the right.
+Write down a task, estimate its time, and focus. Moro connects your checklist, timer, and session history with tasks on the left and a quiet timer on the right.
 
 - **At home on Mac.** SwiftUI, AppKit, system materials, SF Pro, and SF Symbols. Dark, light, and automatic appearance.
 - **A few clicks.** Pick a duration and start. Press Space to pause or resume, or use the menu bar panel.
@@ -75,7 +75,7 @@ Requires macOS 14+ with Apple Command Line Tools or full Xcode. The app interfac
 git clone https://github.com/zzzfu411/afterglow-macos.git
 cd afterglow-macos
 ./scripts/build-local.sh
-open .build/local/留白.app
+open .build/local/Moro.app
 ```
 
 This builds the app and menu bar panel only. Desktop widgets require full Xcode and a valid signing configuration. See [build instructions](docs/BUILDING.md) (Chinese, with shell commands).

@@ -3,8 +3,8 @@
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
-<key>CFBundleName</key><string>留白</string>
-<key>CFBundleDisplayName</key><string>留白</string>
+<key>CFBundleName</key><string>Moro</string>
+<key>CFBundleDisplayName</key><string>Moro</string>
 <key>CFBundlePackageType</key><string>XPC!</string>
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>

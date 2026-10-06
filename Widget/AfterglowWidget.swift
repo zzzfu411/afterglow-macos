@@ -39,7 +39,7 @@ struct FocusWidgetView: View {
                 Link(destination: URL(string: "afterglow://open")!) {
                     VStack(alignment: .leading, spacing: 14) {
                         Image(systemName: "rectangle.3.group").font(.title2)
-                        Text("打开留白").font(.headline)
+                        Text("打开 Moro").font(.headline)
                         Text("检查共享数据").font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -89,7 +89,7 @@ struct AfterglowWidget: Widget {
     let kind = "AfterglowFocus"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: FocusProvider()) { FocusWidgetView(entry: $0) }
-            .configurationDisplayName("留白")
+            .configurationDisplayName("Moro")
             .description("专注片刻，休息一下。")
             .supportedFamilies([.systemSmall, .systemMedium])
             .containerBackgroundRemovable(true)

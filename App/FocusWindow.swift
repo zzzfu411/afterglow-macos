@@ -263,7 +263,7 @@ struct MenuPanel: View {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .help("打开留白").accessibilityLabel("打开留白")
+                    .help("打开 Moro").accessibilityLabel("打开 Moro")
             }
             TimerReadout(state: model.state, size: 58)
             if model.state.mode == .focus {

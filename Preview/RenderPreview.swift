@@ -47,7 +47,7 @@ struct PreviewSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 32) {
             HStack(alignment: .firstTextBaseline) {
-                Text("留白").font(.system(size: 23, weight: .medium))
+                Text("Moro").font(.system(size: 23, weight: .medium))
                 Spacer()
                 Text("字体与配色预览").font(.system(size: 12)).foregroundStyle(.white.opacity(0.78))
             }

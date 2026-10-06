@@ -1,8 +1,15 @@
 # 原生版本验证
 
-更新日期：2026-10-05（Asia/Shanghai）。
+更新日期：2026-10-06（Asia/Shanghai）。
 
 环境：Apple Silicon，macOS 27.0.1，Swift 6.4，CLT macOS SDK，Swift 5 language mode，部署目标 macOS 14。
+
+## 0.6.1 更名为 Moro
+
+- 应用显示名、主窗口、菜单栏无障碍名称、小组件图库名称、安装说明、中英文 README 与静态预览图统一为 Moro；本地应用和 Xcode 构建产物改为 `Moro.app`，预览 ZIP 使用 Moro 名称。
+- 沿用既有 bundle ID、App Group、组件 kind、URL scheme、数据目录与偏好键；工程和 scheme 保留原名。未修改计时、待办、截止时间或后台调度逻辑，没有新增依赖、后台任务或轮询。本轮未新增测试用例或重复资源采样。
+- 主应用构建、SwiftUI 检查和 WidgetKit 编译／链接通过；生成工程和 plist 校验、脚本语法检查及预览 ZIP 内名称／可执行文件检查通过。重新渲染并查看静态预览图，确认标题为 Moro。
+- 0.6.1（build 12）已安装至 `/Applications/Moro.app`；原 0.6.0 已备份。实机启动后窗口与应用菜单均显示 Moro，原有两项待办、当前选中事项和时长正常显示；数据文件逐字节一致，外观与边栏偏好保留。
 
 ## 0.6.0 紧凑边栏与截止时间
 

@@ -13,5 +13,5 @@ fi
 xcodebuild -project "$ROOT/Afterglow.xcodeproj" -scheme Afterglow \
   -configuration Debug -destination 'platform=macOS' \
   -derivedDataPath "$ROOT/.build/xcode" DEVELOPMENT_TEAM="$TEAM" build
-echo "$ROOT/.build/xcode/Build/Products/Debug/Afterglow.app"
-echo "启动一次宿主 App，再到桌面 → 编辑小组件 → 留白。"
+echo "$ROOT/.build/xcode/Build/Products/Debug/Moro.app"
+echo "启动一次宿主 App，再到桌面 → 编辑小组件 → Moro。"

@@ -77,7 +77,7 @@ case "$ARCHS" in
   "arm64 x86_64"|"x86_64 arm64") ARCH_LABEL="universal" ;;
   *) fail "Unsupported app architecture: $ARCHS" ;;
 esac
-ARCHIVE_NAME="Afterglow-$VERSION-build$BUILD_NUMBER-$ARCH_LABEL-$MODE.zip"
+ARCHIVE_NAME="Moro-$VERSION-build$BUILD_NUMBER-$ARCH_LABEL-$MODE.zip"
 FINAL_ZIP="$OUTPUT_DIR/$ARCHIVE_NAME"
 [[ ! -e "$FINAL_ZIP" && ! -L "$FINAL_ZIP" ]] || fail "Archive already exists: $FINAL_ZIP"
 

@@ -10,7 +10,7 @@ struct AfterglowApp: App {
     )
 
     var body: some Scene {
-        Window("留白", id: "main") {
+        Window("Moro", id: "main") {
             FocusWindow(model: model)
                 .environment(\.colorScheme, appearance.colorScheme)
                 .focusedSceneObject(model)
@@ -30,7 +30,7 @@ struct AfterglowApp: App {
             // A stable image avoids AppKit status-item layout churn from a
             // constantly invalidating date Text. The popover shows the timer.
             Image(systemName: "circle.dotted.circle")
-                .accessibilityLabel("留白")
+                .accessibilityLabel("Moro")
         }
         .menuBarExtraStyle(.window)
 

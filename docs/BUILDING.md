@@ -6,7 +6,7 @@
 
 ```sh
 ./scripts/build-local.sh
-open .build/local/留白.app
+open .build/local/Moro.app
 ```
 
 脚本按当前 Mac 的架构构建，使用 ad-hoc 签名，输出在 `.build/local/`。这一构建只含主应用和菜单栏，不安装 WidgetKit 扩展，也不代表公证发行包。
@@ -19,7 +19,7 @@ open .build/local/留白.app
 2. 给 **Afterglow** 和 **AfterglowWidgets** 两个 target 选择同一个真实 Team。
 3. 核对两边的 App Group entitlement 与 Info.plist。默认标识为 `$(DEVELOPMENT_TEAM).app.afterglow.shared`。
 4. 选择 **Afterglow** scheme、**My Mac**，构建并运行宿主一次。
-5. 右键桌面 → **编辑小组件** → 搜索 **留白**，添加小号或中号。
+5. 右键桌面 → **编辑小组件** → 搜索 **Moro**，添加小号或中号。
 
 也可使用终端：
 
@@ -36,11 +36,13 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
 ```
 
-App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代共享容器授权。组件访问不到共享容器时会显示“打开留白”，而不是创建一个独立计时器。
+App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代共享容器授权。组件访问不到共享容器时会显示“打开 Moro”，而不是创建一个独立计时器。
 
 **状态：主应用与组件已通过完整 Xcode 构建及 App Intents 元数据生成；签名后的桌面安装与交互尚未验证。** 完整检查记录见 [QA.md](../QA.md)。
 
 ## 数据与外观
+
+Moro 沿用原应用的 bundle ID、App Group、URL scheme 与数据路径，因此改名后待办、记录和偏好继续可用。Xcode 工程与 scheme 仍名为 `Afterglow`，构建产物为 `Moro.app` 和 `MoroWidgets.appex`。
 
 本地预览版的数据路径：
 

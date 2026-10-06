@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/icon.png" width="96" alt="留白应用图标" />
+  <img src="docs/assets/icon.png" width="96" alt="Moro 应用图标" />
 </p>
 
-<h1 align="center">留白 · Afterglow</h1>
+<h1 align="center">Moro</h1>
 
 <p align="center">把待办变成一段专注。原生 macOS，离线、少打扰。</p>
 
@@ -19,15 +19,15 @@
 </p>
 
 <p align="center">
-  <img src="Preview/widget-preview.png" width="860" alt="留白小号与中号组件的深浅色布局和配色示意" />
+  <img src="Preview/widget-preview.png" width="860" alt="Moro 小号与中号组件的深浅色布局和配色示意" />
   <br /><sub>组件布局与配色示意。实际背景模糊由 macOS 渲染。</sub>
 </p>
 
 > **预览阶段**：主应用已可运行。主应用与小组件已通过完整 Xcode 构建，签名安装和桌面交互仍待验证。
 
-## 为什么做留白
+## 为什么做 Moro
 
-写下一件事，估一个时间，开始专注。留白把清单、计时和记录连在一起，左侧管理待办，右侧只保留这一轮需要的计时操作。
+写下一件事，估一个时间，开始专注。Moro 把清单、计时和记录连在一起，左侧管理待办，右侧只保留这一轮需要的计时操作。
 
 - **像一款 Mac 应用。** SwiftUI + AppKit、系统毛玻璃、SF Pro 与 SF Symbols；支持深色、浅色及自动外观。
 - **点击就能开始。** 选时长，点开始；空格暂停或继续。菜单栏也能快速操作。
@@ -79,7 +79,7 @@
 git clone https://github.com/zzzfu411/afterglow-macos.git
 cd afterglow-macos
 ./scripts/build-local.sh
-open .build/local/留白.app
+open .build/local/Moro.app
 ```
 
 此命令构建主应用和菜单栏面板，不安装桌面小组件。桌面组件需要完整 Xcode 与有效签名配置，见 **[构建与安装](docs/BUILDING.md)**。
