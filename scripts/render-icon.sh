@@ -8,3 +8,4 @@ swiftc -swift-version 5 -parse-as-library \
   "$ROOT/Preview/RenderIcon.swift" -o "$BUILD/RenderIcon"
 "$BUILD/RenderIcon" "$BUILD/AppIcon.iconset"
 iconutil -c icns "$BUILD/AppIcon.iconset" -o "$ROOT/Preview/AppIcon.icns"
+cp "$BUILD/AppIcon.iconset/icon_512x512@2x.png" "$ROOT/docs/assets/icon.png"
