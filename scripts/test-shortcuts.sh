@@ -1,11 +1,13 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT="${0:A:h:h}"
-BUILD="$ROOT/.build/todo-reminder-tests"
+BUILD="$ROOT/.build/shortcut-tests"
 mkdir -p "$BUILD/module-cache"
-swiftc -swift-version 5 -parse-as-library \
+swiftc -O -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macos14.0" -module-cache-path "$BUILD/module-cache" \
   "$ROOT/Shared/FocusTodo.swift" "$ROOT/Shared/FocusState.swift" "$ROOT/Shared/FocusStore.swift" "$ROOT/Shared/TodoWidgetSnapshot.swift" \
   "$ROOT/App/FocusReminders.swift" "$ROOT/App/TodoReminders.swift" \
-  "$ROOT/Tests/TodoReminderTests.swift" -o "$BUILD/TodoReminderTests"
-"$BUILD/TodoReminderTests"
+  "$ROOT/App/FocusStoreObservation.swift" "$ROOT/App/TodoPresentation.swift" "$ROOT/App/TodoTransfer.swift" \
+  "$ROOT/App/FocusModel.swift" "$ROOT/App/QuickEntry.swift" "$ROOT/Tests/ShortcutTests.swift" \
+  -o "$BUILD/ShortcutTests"
+"$BUILD/ShortcutTests"

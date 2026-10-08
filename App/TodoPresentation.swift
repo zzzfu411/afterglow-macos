@@ -73,6 +73,9 @@ struct TodoDraft: Equatable {
     var title = ""
     var minutes = ""
     var notes = ""
+    var steps: [TodoStep] = []
+    var repeatRule: TodoRepeatRule?
+    var repeatScheduledDate: Date?
     var plannedDate: Date?
     var dueDate: Date?
     var hasDueTime = false
@@ -84,7 +87,8 @@ struct TodoDraft: Equatable {
         baseItem = item
         if let item {
             id = item.id; title = item.title; minutes = item.estimatedMinutes.map(String.init) ?? ""
-            notes = item.notes; plannedDate = item.plannedDate; dueDate = item.dueDate
+            notes = item.notes; steps = item.steps; repeatRule = item.repeatRule; repeatScheduledDate = item.repeatScheduledDate
+            plannedDate = item.plannedDate; dueDate = item.dueDate
             hasDueTime = item.hasDueTime; reminderDate = item.reminderDate; listID = item.listID; isNew = false
         }
     }
@@ -92,6 +96,11 @@ struct TodoDraft: Equatable {
         var left = self, right = other
         left.baseItem = nil; right.baseItem = nil; left.isNew = false; right.isNew = false
         return left == right
+    }
+    var hasUnsavedChanges: Bool {
+        if let baseItem { return !sameEditableFields(as: TodoDraft(item: baseItem)) }
+        return !title.isEmpty || !notes.isEmpty || !minutes.isEmpty || !steps.isEmpty || repeatRule != nil
+            || plannedDate != nil || dueDate != nil || reminderDate != nil || listID != nil
     }
     var isValid: Bool {
         let text = minutes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,6 +111,7 @@ struct TodoDraft: Equatable {
         var item = existing ?? FocusTodo(id: id, title: title, createdAt: Date())
         item.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         item.estimatedMinutes = FocusTodo.parseEstimatedMinutes(minutes)
+        item.steps = steps; item.repeatRule = repeatRule; item.repeatScheduledDate = repeatScheduledDate
         item.notes = notes; item.plannedDate = plannedDate; item.dueDate = dueDate
         item.hasDueTime = dueDate != nil && hasDueTime
         item.reminderDate = reminderDate; item.listID = listID

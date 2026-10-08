@@ -8,9 +8,9 @@ SDK="$(xcrun --sdk macosx --show-sdk-path)"
 swiftc -swift-version 5 -parse-as-library -O \
   -target "$(uname -m)-apple-macos14.0" -sdk "$SDK" \
   -module-cache-path "$BUILD/module-cache" \
-  "$ROOT/Shared/FocusTodo.swift" "$ROOT/Shared/FocusState.swift" "$ROOT/Shared/FocusStore.swift" \
+  "$ROOT/Shared/FocusTodo.swift" "$ROOT/Shared/FocusState.swift" "$ROOT/Shared/FocusStore.swift" "$ROOT/Shared/TodoWidgetSnapshot.swift" \
   "$ROOT/Shared/FocusViews.swift" "$ROOT/App/FocusLayout.swift" "$ROOT/App/FocusWindow.swift" "$ROOT/App/FocusTodosView.swift" "$ROOT/App/FocusSettings.swift" "$ROOT/App/NativeMaterial.swift" \
-  "$ROOT/App/FocusModel.swift" "$ROOT/App/TodoPresentation.swift" "$ROOT/App/TodoTransfer.swift" "$ROOT/App/TodoNavigationView.swift" "$ROOT/App/TodoReminders.swift" "$ROOT/App/FocusReminders.swift" "$ROOT/App/FocusStoreObservation.swift" \
+  "$ROOT/App/FocusModel.swift" "$ROOT/App/TodoPresentation.swift" "$ROOT/App/TodoTransfer.swift" "$ROOT/App/QuickEntry.swift" "$ROOT/App/TodoNavigationView.swift" "$ROOT/App/TodoReminders.swift" "$ROOT/App/FocusReminders.swift" "$ROOT/App/FocusStoreObservation.swift" \
   "$ROOT/App/AfterglowApp.swift" -o "$APP/Contents/MacOS/Moro"
 cp "$ROOT/Preview/LocalInfo.plist" "$APP/Contents/Info.plist"
 if [[ -f "$ROOT/Preview/AppIcon.icns" ]]; then

@@ -4,6 +4,7 @@ import WidgetKit
 @main
 struct AfterglowApp: App {
     @StateObject private var model = FocusModel.shared
+    @StateObject private var quickEntry = QuickEntryController(model: FocusModel.shared)
     @StateObject private var appearance = FocusAppearanceController(
         selection: FocusAppearance(rawValue: UserDefaults.standard.string(forKey: "afterglow.appearance") ?? "system") ?? .system,
         defaults: .standard
@@ -25,10 +26,10 @@ struct AfterglowApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: FocusWindowLayout.defaultSize.width, height: FocusWindowLayout.defaultSize.height)
         .defaultPosition(.center)
-        .commands { TimerCommands() }
+        .commands { TimerCommands(quickEntry: quickEntry) }
 
         MenuBarExtra {
-            MenuPanel(model: model)
+            MenuPanel(model: model, quickEntry: quickEntry)
                 .environment(\.colorScheme, appearance.colorScheme)
                 .focusedSceneObject(model)
         } label: {
@@ -40,7 +41,7 @@ struct AfterglowApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            FocusSettings(model: model, appearance: appearance)
+            FocusSettings(model: model, appearance: appearance, quickEntry: quickEntry)
         }
         .windowResizability(.contentSize)
     }

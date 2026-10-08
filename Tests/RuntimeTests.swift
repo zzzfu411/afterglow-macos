@@ -67,6 +67,36 @@ private struct FileSnapshot: Equatable {
     }
 }
 
+private struct RuntimeMemory {
+    let rss: UInt64
+    let footprint: UInt64
+
+    static func sample() throws -> RuntimeMemory {
+        var basic = mach_task_basic_info_data_t()
+        var basicCount = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let basicCapacity = Int(basicCount)
+        let basicResult = withUnsafeMutablePointer(to: &basic) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: basicCapacity) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &basicCount)
+            }
+        }
+        guard basicResult == KERN_SUCCESS else { throw NSError(domain: NSMachErrorDomain, code: Int(basicResult)) }
+        var vm = task_vm_info_data_t()
+        var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let vmCapacity = Int(vmCount)
+        let vmResult = withUnsafeMutablePointer(to: &vm) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: vmCapacity) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+            }
+        }
+        guard vmResult == KERN_SUCCESS else { throw NSError(domain: NSMachErrorDomain, code: Int(vmResult)) }
+        return RuntimeMemory(rss: basic.resident_size, footprint: vm.phys_footprint)
+    }
+    var description: String {
+        String(format: "RSS %.2f MiB / footprint %.2f MiB", Double(rss) / 1_048_576, Double(footprint) / 1_048_576)
+    }
+}
+
 @main
 struct RuntimeTests {
     @MainActor private static var checks = 0
@@ -606,6 +636,25 @@ struct RuntimeTests {
                "search finds tasks beyond the currently loaded page")
         model.searchText = ""
         expect(model.visibleTodos.count == 100, "leaving search resets to bounded paging")
+        model.openTodo(list.items[135].id)
+        expect(model.selectedTodoID == list.items[135].id && model.visibleTodos.count == 200
+               && model.visibleTodos.contains { $0.id == list.items[135].id },
+               "opening an off-page task reveals only the page needed to locate it")
+        model.todoDraft?.notes = "定位前尚未保存的编辑"
+        let sectionBeforeNavigation = model.section
+        model.openTodo(list.items[999].id)
+        expect(model.selectedTodoID == list.items[135].id && model.section == sectionBeforeNavigation
+               && model.todoDraft?.notes == "定位前尚未保存的编辑",
+               "opening another task preserves both navigation and an unsaved draft")
+        model.startFocus(list.items[999].id)
+        await model.flush()
+        model.showCurrentTodo()
+        expect(model.selectedTodoID == list.items[135].id && model.todoDraft?.id == list.items[135].id,
+               "jumping to the active timer task cannot hide a different unsaved draft")
+        model.cancelTodoDraft()
+        model.showCurrentTodo()
+        expect(model.selectedTodoID == list.items[999].id && model.visibleTodos.contains { $0.id == list.items[999].id },
+               "after resolving the draft the current focus task can be located beyond page one")
     }
 
     @MainActor private static func concurrentDraftTest(_ root: URL) async throws {
@@ -658,6 +707,428 @@ struct RuntimeTests {
                "the original draft baseline detects edit conflicts and preserves unsaved text")
     }
 
+    @MainActor private static func focusQueueTests(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("focus-queue")
+        let collection = TodoCollection(title: "工作")
+        let a = FocusTodo(title: "A"), b = FocusTodo(title: "B 已完成", isCompleted: true)
+        let c = FocusTodo(title: "C"), d = FocusTodo(title: "D 已删除", deletedAt: Date())
+        let e = FocusTodo(title: "E 稍后完成"), f = FocusTodo(title: "F 稍后删除")
+        let g = FocusTodo(title: "G", listID: collection.id)
+        var state = FocusState()
+        var list = FocusTodoList()
+        list.items = [a, b, c, d, e, f, g]; list.collections = [collection]
+        state.todoList = list
+        let oldEnd = Date().addingTimeInterval(-1_000)
+        state.logs = [
+            FocusLog(id: UUID(), task: "旧整表", startedAt: oldEnd.addingTimeInterval(-60), endedAt: oldEnd,
+                     seconds: 60, completed: true, todoIDs: [a.id, c.id]),
+            FocusLog(id: UUID(), task: "C", startedAt: oldEnd.addingTimeInterval(-120), endedAt: oldEnd.addingTimeInterval(-60),
+                     seconds: 60, completed: true)
+        ]
+        try write(state, to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        expect(model.summary(for: a.id) == nil && model.summary(for: c.id) == nil,
+               "legacy multi-task and unlinked logs are not guessed or double-attributed")
+        model.editTodo(g.id)
+        model.todoDraft?.notes = "保留编辑内容"
+        model.startFocusQueue([b.id, c.id, a.id, c.id, d.id, e.id, f.id, g.id, UUID()])
+        await model.flush()
+        expect(model.focusQueue == [c.id, a.id, e.id, f.id, g.id] && model.queueIndex == 0,
+               "queue retains requested order while excluding duplicates, completed, deleted, and absent tasks")
+        expect(model.state.sessionTodoIDs == [c.id] && model.state.status == .running,
+               "the queue starts only its first task")
+        expect(model.todoDraft?.notes == "保留编辑内容", "starting a queue preserves an unrelated task draft")
+        await delay(0.03)
+        model.advanceFocusQueue()
+        await model.flush()
+        expect(model.state.sessionTodoIDs == [a.id] && model.queueIndex == 1,
+               "explicit skip advances to the next task in order")
+        expect(model.state.todos.first { $0.id == c.id }?.isPending == true,
+               "skipping never marks the previous task complete")
+        expect(model.state.logs.filter { $0.todoIDs == [c.id] }.count == 1,
+               "skipping settles exactly one log associated only with the skipped task")
+        model.completeTodo(e.id)
+        await model.flush()
+        model.trashTodo(f.id)
+        await model.flush()
+        await delay(0.03)
+        model.completeTodo(a.id)
+        await model.flush()
+        expect(model.state.status == .done && model.state.sessionTodoIDs == [a.id] && model.hasNextQueueItem,
+               "completion settles the current focus and waits for an explicit next action")
+        model.advanceFocusQueue()
+        await model.flush()
+        expect(model.state.sessionTodoIDs == [g.id] && model.queueIndex == 4,
+               "advancing skips tasks completed or deleted after the queue was created")
+        let currentSession = model.state.sessionID
+        model.startFocusQueue([g.id, c.id])
+        expect(model.state.sessionID == currentSession && model.focusQueue == [g.id, c.id],
+               "rebuilding a queue around the already running first task does not restart its timer")
+        model.section = .collection(collection.id)
+        model.selectedTodoID = g.id
+        model.quickEntryText = "主窗口未提交标题"
+        let captured = try await model.captureInbox(title: "  独立快速录入  ")
+        await model.flush()
+        let inbox = model.state.todos.first { $0.id == captured }!
+        expect(inbox.title == "独立快速录入" && inbox.listID == nil && inbox.plannedDate == nil && inbox.estimatedMinutes == nil,
+               "global capture always creates a title-only Inbox task")
+        expect(model.section == .collection(collection.id) && model.selectedTodoID == g.id
+               && model.quickEntryText == "主窗口未提交标题" && model.todoDraft?.notes == "保留编辑内容",
+               "global capture leaves main-window navigation, selection, quick input, and editing intact")
+        expect(model.state.sessionID == currentSession && model.state.sessionTodoIDs == [g.id],
+               "global capture does not replace the current queue session")
+        await delay(0.03)
+        model.completeTodo(g.id)
+        await model.flush()
+        expect(model.todoDraft?.notes == "保留编辑内容", "explicit completion still preserves unsaved task text")
+        expect(model.summary(for: c.id)?.sessionCount == 1 && model.summary(for: a.id)?.sessionCount == 1
+               && model.summary(for: g.id)?.sessionCount == 1, "each queue item receives exactly its own session summary")
+        expect(model.summary(for: b.id) == nil && model.summary(for: e.id) == nil && model.summary(for: f.id) == nil,
+               "tasks that were never focused do not acquire other tasks' time")
+        let logIDs = model.state.logs.map(\.id)
+        model.refresh(); model.refresh()
+        await model.flush()
+        expect(model.state.logs.map(\.id) == logIDs && Set(logIDs).count == logIDs.count,
+               "repeated refresh does not duplicate settled queue logs")
+
+        model.cancelTodoDraft()
+        model.startFreeFocus()
+        await model.flush()
+        let oldSession = model.state.sessionID, oldDeadline = model.state.deadline
+        model.startFocusQueue([c.id, captured])
+        expect(model.pendingFocusID == c.id && model.state.sessionID == oldSession && model.state.deadline == oldDeadline,
+               "starting a different queue asks before ending the old session")
+        await delay(0.03)
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.sessionID != oldSession && model.state.sessionTodoIDs == [c.id]
+               && model.focusQueue == [c.id, captured], "confirmation atomically settles the old session and starts the requested queue")
+        let survivingSession = model.state.sessionID, survivingDeadline = model.state.deadline
+        model.startFocus(captured)
+        expect(model.pendingFocusID == captured, "another task waits for the switch confirmation")
+        model.completeTodo(captured)
+        await model.flush()
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.sessionID == survivingSession && model.state.deadline == survivingDeadline
+               && model.state.sessionTodoIDs == [c.id], "a target completed while confirmation is open cannot replace the old session")
+        let removedTarget = try await model.captureInbox(title: "确认前删除")
+        model.startFocus(removedTarget)
+        model.trashTodo(removedTarget)
+        await model.flush()
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.sessionID == survivingSession && model.state.deadline == survivingDeadline,
+               "a target deleted while confirmation is open cannot end the old session")
+        let queueBeforeInvalidStart = model.focusQueue
+        model.startFocusQueue([b.id, d.id])
+        await model.flush()
+        expect(model.state.sessionID == survivingSession && model.focusQueue == queueBeforeInvalidStart,
+               "an empty effective queue leaves the existing session and queue intact")
+    }
+
+    @MainActor private static func customFocusDurationTests(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("custom-focus-duration")
+        let a = FocusTodo(title: "预计九十分钟", estimatedMinutes: 90)
+        let b = FocusTodo(title: "预计十分钟", estimatedMinutes: 10)
+        let completed = FocusTodo(title: "已完成", isCompleted: true)
+        let deleted = FocusTodo(title: "已删除", deletedAt: Date())
+        var seed = FocusState(duration: 33 * 60), list = FocusTodoList()
+        list.items = [a, b, completed, deleted]; seed.todoList = list
+        try write(seed, to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        let file = directory.appendingPathComponent("focus-state.json")
+        let idleState = model.state, idleFile = try FileSnapshot(file)
+        for invalid in [Int.min, -1, 0, 181, Int.max] {
+            model.startFocus(a.id, minutes: invalid)
+            await model.flush()
+            let unchangedFile = try FileSnapshot(file)
+            expect(model.state == idleState && model.pendingFocusID == nil && !model.isBusy
+                   && unchangedFile == idleFile,
+                   "an out-of-range custom duration cannot overflow, start, or write a session")
+        }
+        for invalidID in [completed.id, deleted.id, UUID()] {
+            model.startFocus(invalidID, minutes: 17)
+            await model.flush()
+            let unchangedFile = try FileSnapshot(file)
+            expect(model.state == idleState && unchangedFile == idleFile,
+                   "custom focus refuses completed, deleted, and missing tasks without a partial write")
+        }
+
+        model.startFocus(a.id)
+        await model.flush()
+        expect(model.state.status == .running && model.state.sessionTodoIDs == [a.id]
+               && model.state.duration == 33 * 60,
+               "omitting custom minutes preserves the existing focus default rather than using the task estimate")
+        let defaultSession = model.state.sessionID, defaultState = model.state
+        model.showFocus = false
+        model.startFocus(a.id)
+        await model.flush()
+        expect(model.showFocus && model.pendingFocusID == nil && model.state == defaultState,
+               "starting the active task with default minutes only reveals its existing timer")
+
+        let defaultFile = try FileSnapshot(file)
+        model.startFocus(a.id, minutes: 1)
+        expect(model.pendingFocusID == a.id && model.state == defaultState && !model.isBusy,
+               "a custom duration for the active task waits for confirmation even at the lower bound")
+        model.pendingFocusID = nil
+        model.confirmSwitchFocus()
+        await model.flush()
+        let cancelledSameTaskFile = try FileSnapshot(file)
+        expect(model.state == defaultState && cancelledSameTaskFile == defaultFile,
+               "cancelling a same-task duration change leaves the timer and disk untouched")
+
+        model.startFocus(a.id, minutes: 180)
+        expect(model.pendingFocusID == a.id && model.state == defaultState,
+               "the upper-bound duration is also pending until explicitly confirmed")
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.status == .running && model.state.sessionID != defaultSession
+               && model.state.sessionTodoIDs == [a.id] && model.state.duration == 180 * 60,
+               "confirming same-task custom focus starts a fresh session with the exact upper-bound duration")
+        expect(model.state.logs.filter { $0.id == defaultSession }.count == 1
+               && model.state.logs.first { $0.id == defaultSession }?.todoIDs == [a.id],
+               "restarting the same task settles its old session exactly once")
+        expect(model.state.todos.first { $0.id == a.id }?.estimatedMinutes == 90
+               && model.state.focusDuration == 180 * 60 && model.pendingFocusID == nil,
+               "custom session minutes become the remembered default without changing the task estimate")
+
+        model.send(.pause)
+        await model.flush()
+        let paused = model.state, pausedFile = try FileSnapshot(file)
+        model.startFocus(a.id, minutes: 1)
+        expect(model.pendingFocusID == a.id && model.state == paused,
+               "a paused session also requires confirmation before changing its duration")
+        model.pendingFocusID = nil
+        await model.flush()
+        let cancelledPausedFile = try FileSnapshot(file)
+        expect(model.state == paused && cancelledPausedFile == pausedFile,
+               "cancelling custom focus preserves a paused session and its remaining time")
+        model.startFocus(a.id, minutes: 1)
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.status == .running && model.state.sessionID != paused.sessionID
+               && model.state.duration == 60 && model.state.sessionTodoIDs == [a.id],
+               "confirming from pause starts a new lower-bound session instead of resuming the old duration")
+        expect(model.state.logs.filter { $0.id == paused.sessionID }.count == 1,
+               "replacing a paused session settles that session only once")
+
+        let beforeSwitch = model.state, beforeSwitchFile = try FileSnapshot(file)
+        model.startFocus(b.id, minutes: 47)
+        expect(model.pendingFocusID == b.id && model.state == beforeSwitch,
+               "switching tasks with custom minutes leaves the current timer running until confirmation")
+        model.pendingFocusID = nil
+        await model.flush()
+        let cancelledSwitchFile = try FileSnapshot(file)
+        expect(model.state == beforeSwitch && cancelledSwitchFile == beforeSwitchFile,
+               "cancelling a different-task custom focus does not select or reschedule anything")
+        model.startFocus(b.id, minutes: 47)
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.status == .running && model.state.sessionTodoIDs == [b.id]
+               && model.state.sessionID != beforeSwitch.sessionID && model.state.duration == 47 * 60,
+               "confirming another task applies its custom duration in the new session")
+        expect(model.state.logs.filter { $0.id == beforeSwitch.sessionID }.count == 1
+               && model.state.todos.first { $0.id == b.id }?.estimatedMinutes == 10,
+               "task switching preserves its estimate and records the replaced session once")
+
+        let beforeQueue = model.state
+        model.startFocus(a.id, minutes: 79)
+        model.startFocusQueue([a.id, b.id])
+        expect(model.pendingFocusID == a.id && model.state == beforeQueue,
+               "replacing a pending custom request with a queue still awaits confirmation")
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.duration == 47 * 60 && model.state.sessionTodoIDs == [a.id]
+               && model.focusQueue == [a.id, b.id],
+               "a pending queue uses the saved default instead of the unconfirmed custom request")
+        model.advanceFocusQueue()
+        await model.flush()
+        expect(model.state.duration == 47 * 60 && model.state.sessionTodoIDs == [b.id],
+               "the next queued task uses the saved default without leaking the cancelled custom minutes")
+
+        model.send(.finish)
+        await model.flush()
+        model.send(.reset)
+        await model.flush()
+        var published: [FocusState] = []
+        let observation = model.$state.dropFirst().sink { published.append($0) }
+        model.startFocus(a.id, minutes: 17)
+        await model.flush()
+        observation.cancel()
+        expect(published.count == 1 && published[0].status == .running
+               && published[0].sessionTodoIDs == [a.id] && published[0].duration == 17 * 60,
+               "idle custom focus publishes only the complete target-duration-start transaction")
+        let persisted = try FocusStore(directory: directory).snapshot()
+        expect(persisted == model.state && persisted.focusTarget == .todo(a.id) && persisted.focusDuration == 17 * 60
+               && persisted.todos.first { $0.id == a.id }?.estimatedMinutes == 90
+               && persisted.todos.first { $0.id == b.id }?.estimatedMinutes == 10,
+               "idle custom focus durably stores its session without rewriting either estimate")
+
+        let surviving = model.state
+        model.startFocus(b.id, minutes: 29)
+        model.completeTodo(b.id)
+        await model.flush()
+        model.confirmSwitchFocus()
+        await model.flush()
+        expect(model.state.sessionID == surviving.sessionID && model.state.deadline == surviving.deadline
+               && model.state.duration == surviving.duration && model.state.logs == surviving.logs,
+               "a custom-focus target completed before confirmation cannot end or alter the original session")
+        expect(model.pendingFocusID == nil && model.notice != nil,
+               "an invalidated custom-focus request closes with visible feedback")
+        model.send(.finish)
+        await model.flush()
+        model.startFocus(a.id)
+        await model.flush()
+        expect(model.state.status == .running && model.state.duration == 17 * 60
+               && model.state.todos.first { $0.id == a.id }?.estimatedMinutes == 90,
+               "a later default start reuses the last confirmed custom duration without changing the estimate")
+    }
+
+    @MainActor private static func customFocusInvalidationRaceTest(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("custom-focus-race")
+        let target = FocusTodo(title: "确认时仍待办", estimatedMinutes: 90)
+        let current = FocusTodo(title: "正在专注", estimatedMinutes: 20)
+        var seed = FocusState(), list = FocusTodoList()
+        // The existing test worker completes the first stored task while holding
+        // the cross-process lock, after the model has accepted the confirmation.
+        list.items = [target, current]; seed.todoList = list
+        try write(seed, to: directory)
+        let store = FocusStore(directory: directory)
+        let model = FocusModel(store: store, remindersEnabled: false)
+        await model.flush()
+        model.startFocus(current.id, minutes: 19)
+        await model.flush()
+        await delay(0.15)
+        let original = model.state
+        model.startFocus(target.id, minutes: 35)
+        let ready = Pipe(), release = Pipe()
+        let editor = try process(arguments: ["--edit-under-lock", directory.path, "锁内已完成"],
+                                 output: ready, input: release)
+        defer { if editor.isRunning { editor.terminate() }; editor.waitUntilExit() }
+        expect(ready.fileHandleForReading.readData(ofLength: 1) == Data([1]),
+               "custom-focus race owns the file lock before confirmation starts")
+        model.confirmSwitchFocus()
+        await waitUntil("custom-focus transaction waits behind the external completion") {
+            ((try? descriptors(for: directory.appendingPathComponent("focus-state.lock"))) ?? 0) > 0
+        }
+        expect(model.isBusy && model.state.sessionID == original.sessionID,
+               "an in-flight custom-focus confirmation does not expose a prematurely finished session")
+        try release.fileHandleForWriting.write(contentsOf: Data([1]))
+        await waitUntil("external completion releases the custom-focus transaction") { !editor.isRunning }
+        expect(editor.terminationStatus == 0, "custom-focus race worker completed successfully")
+        await model.flush()
+        let persisted = try store.snapshot()
+        expect(persisted.todos.first { $0.id == target.id }?.isCompleted == true,
+               "the concurrent completion remains saved after the custom-focus transaction fails")
+        expect(persisted.sessionID == original.sessionID && persisted.deadline == original.deadline
+               && persisted.sessionTodoIDs == original.sessionTodoIDs && persisted.duration == original.duration
+               && persisted.focusDuration == original.focusDuration && persisted.logs == original.logs,
+               "target invalidation rolls back finish, selection, remembered duration, and start together")
+        expect(model.error != nil && model.pendingFocusID == nil,
+               "a rejected custom-focus transaction reports failure instead of pretending it started")
+    }
+
+    @MainActor private static func customFocusBusyConfirmationTest(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("custom-focus-busy-confirmation")
+        let current = FocusTodo(title: "保存期间继续计时"), target = FocusTodo(title: "确认后切换")
+        var seed = FocusState(), list = FocusTodoList()
+        list.items = [current, target]; seed.todoList = list
+        try write(seed, to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        model.startFocus(current.id, minutes: 13)
+        await model.flush()
+        await delay(0.15)
+        let original = model.state
+        model.startFocus(target.id, minutes: 42)
+        let ready = Pipe()
+        let holder = try process(arguments: ["--hold-lock", directory.path], output: ready)
+        defer { if holder.isRunning { holder.terminate() }; holder.waitUntilExit() }
+        expect(ready.fileHandleForReading.readData(ofLength: 1) == Data([1]),
+               "busy-confirmation probe holds the file lock before quick capture")
+        let capture = Task { @MainActor in try await model.captureInbox(title: "切换确认中的快速录入") }
+        await waitUntil("quick capture blocks on storage while the focus confirmation is open") {
+            model.isBusy && ((try? descriptors(for: directory.appendingPathComponent("focus-state.lock"))) ?? 0) > 0
+        }
+        model.confirmSwitchFocus()
+        expect(model.pendingFocusID == nil && model.isBusy && model.state == original,
+               "confirming during quick capture queues the transition without changing the current timer early")
+        holder.terminate(); holder.waitUntilExit()
+        let captured = try await capture.value
+        await model.flush()
+        expect(model.state.todos.contains { $0.id == captured && $0.title == "切换确认中的快速录入" && $0.listID == nil },
+               "quick capture completes successfully ahead of the queued focus confirmation")
+        expect(model.state.status == .running && model.state.sessionTodoIDs == [target.id]
+               && model.state.duration == 42 * 60 && model.state.focusDuration == 42 * 60,
+               "a confirmed custom switch is not dropped when quick capture was already saving")
+        expect(model.state.logs.filter { $0.id == original.sessionID }.count == 1
+               && model.error == nil && !model.isBusy,
+               "the queued confirmation settles the old round once and flush waits for both writes")
+    }
+
+    @MainActor private static func modelStressTest(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("model-stress")
+        var seed = FocusState(), list = FocusTodoList()
+        list.items = (0..<999).map { FocusTodo(title: "基准事项 \($0)", notes: "仅模型压力测试", sortOrder: $0) }
+        seed.todoList = list
+        try write(seed, to: directory)
+        var model: FocusModel? = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model!.flush()
+        model!.section = .all
+        var persistenceSamples: [Double] = []
+        var baseline: RuntimeMemory?, midpoint: RuntimeMemory?
+        for round in 0..<110 {
+            let current = model!
+            let isMeasured = round >= 10
+            var started = CFAbsoluteTimeGetCurrent()
+            let id = try await current.captureInbox(title: "压力录入 \(round)")
+            await current.flush()
+            if isMeasured { persistenceSamples.append((CFAbsoluteTimeGetCurrent() - started) * 1_000) }
+            current.searchText = "压力录入 \(round)"
+            expect(current.visibleTodoCount == 1, "stress search locates the newly persisted task")
+            current.openTodo(id)
+            expect(current.todoDraft?.id == id, "stress expand opens the selected task")
+            current.cancelTodoDraft()
+            started = CFAbsoluteTimeGetCurrent()
+            current.completeTodo(id)
+            await current.flush()
+            if isMeasured { persistenceSamples.append((CFAbsoluteTimeGetCurrent() - started) * 1_000) }
+            expect(current.state.todos.first { $0.id == id }?.isCompleted == true, "stress completion persists")
+            started = CFAbsoluteTimeGetCurrent()
+            current.undoTodoChange()
+            await current.flush()
+            if isMeasured { persistenceSamples.append((CFAbsoluteTimeGetCurrent() - started) * 1_000) }
+            expect(current.state.todos.first { $0.id == id }?.isPending == true, "stress undo restores the task")
+            // Undo insertion as well, so every round returns to the same data size.
+            started = CFAbsoluteTimeGetCurrent()
+            current.undoTodoChange()
+            await current.flush()
+            if isMeasured { persistenceSamples.append((CFAbsoluteTimeGetCurrent() - started) * 1_000) }
+            current.searchText = ""; current.section = .all
+            expect(current.state.todos.count == 999 && current.visibleTodos.count == 100 && current.error == nil,
+                   "stress cleanup restores a bounded page and fixed dataset")
+            if round == 9 { baseline = try RuntimeMemory.sample() }
+            if round == 59 { midpoint = try RuntimeMemory.sample() }
+        }
+        await model!.flush()
+        let after = try RuntimeMemory.sample()
+        let reference = WeakReference(model)
+        model = nil
+        await waitUntil("stress model and its undo/draft state release") { reference.value == nil }
+        await waitUntil("stress release closes its store watcher") { (try? descriptors(for: directory)) == 0 }
+        await delay(0.1)
+        let released = try RuntimeMemory.sample()
+        let p95 = persistenceSamples.sorted()[Int(Double(persistenceSamples.count - 1) * 0.95)]
+        print(String(format: "PERF: model-only 100 rounds after 10 warmups, 999 fixed tasks, %d durable transactions, p95 %.2f ms", persistenceSamples.count, p95))
+        print("RESOURCE: same process, model-only baseline [\(baseline!.description)], 50 rounds [\(midpoint!.description)], 100 rounds [\(after.description)], model released [\(released.description)]")
+        expect(persistenceSamples.count == 400, "model stress measures every insert, complete, restore and insertion undo")
+        expect(after.footprint <= midpoint!.footprint + 16 * 1_048_576,
+               "the warmed fixed-size workload does not accumulate large per-round allocations")
+    }
+
     @MainActor private static func modelReleaseTest(_ root: URL) async throws {
         let directory = root.appendingPathComponent("release")
         try write(FocusState(duration: 60, task: "release").applying(.start), to: directory)
@@ -687,11 +1158,16 @@ struct RuntimeTests {
                 try await asynchronousQueueTests(directory)
                 try await concurrentDraftTest(directory)
                 try await presentationAndScaleTests(directory)
+                try await focusQueueTests(directory)
+                try await customFocusDurationTests(directory)
+                try await customFocusInvalidationRaceTest(directory)
+                try await customFocusBusyConfirmationTest(directory)
+                try await modelStressTest(directory)
                 try await modelReleaseTest(directory)
             } catch { failure = error }
             finished = true
         }
-        let timeout = Date().addingTimeInterval(75)
+        let timeout = Date().addingTimeInterval(180)
         while !finished, Date() < timeout {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }

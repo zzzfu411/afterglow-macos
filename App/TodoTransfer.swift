@@ -3,7 +3,7 @@ import Foundation
 /// A portable task archive. Focus sessions, settings, and logs are intentionally
 /// absent, so importing a checklist cannot replace the running clock or history.
 public struct TodoArchive: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
     public static let formatIdentifier = "moro.todo-archive"
     public var format: String
     public var version: Int
@@ -21,7 +21,8 @@ public struct TodoArchive: Codable, Equatable, Sendable {
 
     public func validate() throws {
         guard format == Self.formatIdentifier else { throw TodoTransferError.invalidArchive }
-        guard version == Self.currentVersion else { throw TodoTransferError.unsupportedVersion(version) }
+        guard (1...Self.currentVersion).contains(version) else { throw TodoTransferError.unsupportedVersion(version) }
+        if version < 2 && todos.contains(where: \.hasVersion5Metadata) { throw TodoTransferError.invalidArchive }
         guard FocusTodo.validDate(exportedAt), todos.count <= FocusTodo.maximumStoredCount,
               todos.filter(\.isPending).count <= FocusTodo.maximumCount,
               todos.allSatisfy(\.isValid), Set(todos.map(\.id)).count == todos.count,

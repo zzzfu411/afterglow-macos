@@ -1,21 +1,20 @@
 import AppKit
 import SwiftUI
+import WidgetKit
 
 struct WidgetPreview: View {
-    let state: FocusState
+    let entry: FocusEntry
     let medium: Bool
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        FocusWidgetFace(state: state, medium: medium, live: false) {
-            TimerSymbol(symbol: state.primarySymbol, primary: true, diameter: medium ? 46 : 34)
-        } secondary: {
-            TimerSymbol(symbol: state.isActive ? "stop.fill" : "cup.and.saucer", diameter: 34)
-        }
-        .padding(18)
+        // Use the real widget's task layout, type and controls. Only the system
+        // container is replaced: ImageRenderer cannot sample desktop material.
+        FocusWidgetView(entry: entry, previewFamily: medium ? .systemMedium : .systemSmall, live: false)
+        .environment(\.widgetRenderingMode, .fullColor)
+        .padding(16)
         .frame(width: medium ? 344 : 170, height: 170)
         .background {
-            // ImageRenderer cannot sample a WindowServer/WidgetKit backdrop.
-            // This is an explicit translucent color study, not a fake desktop capture.
+            // An explicitly labelled color study, not a desktop screenshot.
             let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
             shape.fill(scheme == .dark ? FocusPalette.slate.opacity(0.77) : FocusPalette.mist.opacity(0.88))
                 .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.40), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.65))
@@ -44,30 +43,45 @@ struct PreviewBackdrop: View {
 }
 
 struct PreviewSheet: View {
+    private let date = Date(timeIntervalSince1970: 1_791_432_000)
+
+    private func entry(active: Bool) -> FocusEntry {
+        let day = Calendar.current.startOfDay(for: date)
+        var state = FocusState()
+        for (index, title) in ["整理今天的安排", "完成阅读笔记", "傍晚散步二十分钟"].enumerated() {
+            state = state.applying(.upsertTodo(FocusTodo(title: title, plannedDate: day, sortOrder: index)), at: date)
+        }
+        if active { state = state.applying(.start, at: date.addingTimeInterval(-450)) }
+        return FocusEntry(date: date, snapshot: TodoWidgetSnapshot(state: state))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Moro").font(.system(size: 23, weight: .medium))
                 Spacer()
-                Text("字体与配色预览").font(.system(size: 12)).foregroundStyle(.white.opacity(0.78))
+                Text("待办小组件").font(.system(size: 12)).foregroundStyle(.white.opacity(0.78))
             }
             .foregroundStyle(.white)
-            HStack(spacing: 28) {
-                WidgetPreview(state: FocusState(), medium: false)
-                WidgetPreview(state: FocusState(), medium: true)
-            }
-            .environment(\.colorScheme, .dark)
-            HStack(spacing: 28) {
-                WidgetPreview(state: FocusState(mode: .rest), medium: false)
-                WidgetPreview(state: FocusState(duration: 1500).applying(.start).applying(.pause, at: Date().addingTimeInterval(227)), medium: true)
-            }
-            .environment(\.colorScheme, .light)
-            Text("静态材质示意 · 实际模糊与透明效果由 macOS 合成")
+            previewRow("浅色", scheme: .light)
+            previewRow("深色", scheme: .dark)
+            Text("布局与配色示意 · 实际模糊与透明效果由 macOS 合成")
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.82))
         }
         .padding(48)
         .background(PreviewBackdrop())
         .environment(\.colorScheme, .light)
+    }
+
+    private func previewRow(_ title: String, scheme: ColorScheme) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.82))
+            HStack(spacing: 28) {
+                WidgetPreview(entry: entry(active: false), medium: false)
+                WidgetPreview(entry: entry(active: true), medium: true)
+            }
+            .environment(\.colorScheme, scheme)
+        }
     }
 }
 

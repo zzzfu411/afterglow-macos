@@ -11,6 +11,7 @@ struct FocusTodosView: View {
     private var canAdd: Bool { model.section != .completed && model.section != .trash }
     private var canReorder: Bool {
         model.sort == .manual && model.searchText.isEmpty && canAdd
+            && model.todoDraft == nil && !model.isBusy
     }
     private var detachedDraft: Bool {
         guard let draft = model.todoDraft else { return false }
@@ -26,10 +27,13 @@ struct FocusTodosView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: model.quickEntryRequest) { _, _ in quickEntryFocused = true }
+        .onChange(of: model.showSearch) { _, shown in if shown { quickEntryFocused = false } }
+        .onChange(of: model.searchRequest) { _, _ in quickEntryFocused = false }
         .onChange(of: model.section) { _, _ in viewState.selectedIDs.removeAll(); viewState.selectionAnchor = nil }
         .onChange(of: model.searchText) { _, _ in viewState.selectedIDs.removeAll(); viewState.selectionAnchor = nil }
         .onChange(of: model.visibleTodos.map(\.id)) { _, ids in
             viewState.selectedIDs.formIntersection(ids)
+            if let id = viewState.customFocusID, !ids.contains(id) { viewState.customFocusID = nil }
         }
         .onChange(of: viewState.selectedIDs) { _, ids in
             if ids.count == 1, let id = ids.first { model.selectTodo(id) }
@@ -52,13 +56,20 @@ struct FocusTodosView: View {
                         Text("截止日期").tag(TodoSort.deadline)
                         Text("手动排序").tag(TodoSort.manual)
                     }
+                    if model.visibleTodos.filter(\.isPending).count > 1 {
+                        Divider()
+                        Button(model.hasMoreTodos ? "依次专注已显示事项" : "依次专注当前清单", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                            model.startFocusQueue(model.visibleTodos.filter(\.isPending).map(\.id))
+                        }
+                        .disabled(model.isBusy)
+                    }
                 } label: {
-                    Image(systemName: "arrow.up.arrow.down")
+                    Image(systemName: "ellipsis.circle")
                         .frame(width: 28, height: 28)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help(model.sort == .manual ? "手动排序，可拖动事项" : "按截止日期排序")
-                .accessibilityLabel("事项排序")
+                .help("清单排序与专注")
+                .accessibilityLabel("清单操作")
             }
         }
         .padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 16)
@@ -106,30 +117,41 @@ struct FocusTodosView: View {
         List(selection: $viewState.selectedIDs) {
             if detachedDraft {
                 TodoEditor(model: model)
-                    .id(model.todoDraft?.id)
+                    .id("detached-editor-\(model.todoDraft?.id.uuidString ?? "")")
+                    .selectionDisabled(true)
+                    .moveDisabled(true)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color(nsColor: .textBackgroundColor))
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
             }
             ForEach(model.visibleTodos) { item in
-                VStack(alignment: .leading, spacing: 0) {
-                    taskRow(item)
-                    if model.todoDraft?.id == item.id {
-                        TodoEditor(model: model)
-                            .id(item.id)
-                            .padding(.leading, 34).padding(.trailing, 6).padding(.bottom, 14)
+                taskRow(item)
+                    .id(item.id)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("todo-row-\(item.id.uuidString)")
+                    .accessibilityActions { accessibleTaskActions(item) }
+                    .tag(item.id)
+                    .moveDisabled(!canReorder)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+                    .listRowSeparator(.hidden)
+                    .contextMenu {
+                        if viewState.selectedIDs.count > 1 && viewState.selectedIDs.contains(item.id) {
+                            selectionActions
+                        } else { itemActions(item) }
                     }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("todo-row-\(item.id.uuidString)")
-                .accessibilityActions { accessibleTaskActions(item) }
-                .tag(item.id)
-                .moveDisabled(!canReorder)
-                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
-                .listRowSeparator(.hidden)
-                .contextMenu {
-                    if viewState.selectedIDs.count > 1 && viewState.selectedIDs.contains(item.id) {
-                        selectionActions
-                    } else { itemActions(item) }
+                if model.todoDraft?.id == item.id {
+                    // The native selection belongs to the task header alone.
+                    // An editor is a separate, nonselectable row so AppKit never
+                    // turns all fields into one large highlighted table cell.
+                    TodoEditor(model: model)
+                        .id("editor-\(item.id.uuidString)")
+                        .padding(.leading, 34).padding(.trailing, 6).padding(.bottom, 14)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .selectionDisabled(true)
+                        .moveDisabled(true)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 2, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color(nsColor: .textBackgroundColor))
                 }
             }
             .onMove { indices, destination in
@@ -141,10 +163,11 @@ struct FocusTodosView: View {
                     .buttonStyle(.plain).foregroundStyle(Color.accentColor)
                     .frame(maxWidth: .infinity, minHeight: 36)
                     .listRowSeparator(.hidden)
+                    .selectionDisabled(true)
                     .disabled(model.isBusy)
             }
         }
-        .listStyle(.plain)
+        .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .overlay {
             if model.visibleTodos.isEmpty && !detachedDraft { emptyState }
@@ -159,7 +182,7 @@ struct FocusTodosView: View {
                       model.section != .trash else { return .ignored }
                 model.editTodo(id)
             } else {
-                guard model.section != .trash else { return .ignored }
+                guard model.section != .trash, model.todoDraft == nil else { return .ignored }
                 let selected = model.visibleTodos.filter { viewState.selectedIDs.contains($0.id) }
                 model.setTodosCompleted(Array(viewState.selectedIDs), !selected.allSatisfy(\.isCompleted))
             }
@@ -213,11 +236,15 @@ struct FocusTodosView: View {
                         .frame(width: 28, height: 34).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(isFocusing(item) ? Color.accentColor : Color.secondary)
+                .foregroundStyle(viewState.selectedIDs.contains(item.id) ? Color.primary : (isFocusing(item) ? Color.accentColor : Color.secondary))
                 .help(isFocusing(item) ? "正在专注" : "开始专注")
                 .accessibilityLabel("专注：\(item.title)")
                 .accessibilityIdentifier("todo-focus-\(item.id.uuidString)")
                 .disabled(model.isBusy)
+                .popover(isPresented: focusDurationPresented(for: item.id), arrowEdge: .trailing) {
+                    TodoFocusDurationEditor(model: model, viewState: viewState, itemID: item.id)
+                }
+                .contextMenu { focusDurationActions(item) }
             }
 
             Menu { itemActions(item) } label: {
@@ -259,12 +286,14 @@ struct FocusTodosView: View {
         if let minutes = item.estimatedMinutes { fields.append("预计 \(minutes) 分钟") }
         if item.reminderDate != nil { fields.append("已设置提醒") }
         if !item.notes.isEmpty { fields.append("含备注") }
+        if !item.steps.isEmpty { fields.append("步骤 \(item.steps.filter(\.isCompleted).count)/\(item.steps.count)") }
+        if let rule = item.repeatRule { fields.append(repeatTitle(rule.frequency) + "重复") }
         return fields.joined(separator: "，")
     }
 
     @ViewBuilder private func metadata(_ item: FocusTodo) -> some View {
         let hasMetadata = item.dueDate != nil || item.plannedDate != nil || item.estimatedMinutes != nil
-            || item.reminderDate != nil || !item.notes.isEmpty
+            || item.reminderDate != nil || !item.notes.isEmpty || !item.steps.isEmpty || item.repeatRule != nil
         if hasMetadata {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { metadataLabels(item) }
@@ -296,6 +325,14 @@ struct FocusTodosView: View {
         if !item.notes.isEmpty {
             Image(systemName: "text.alignleft").help("含备注").accessibilityLabel("含备注")
         }
+        if !item.steps.isEmpty {
+            Label("\(item.steps.filter(\.isCompleted).count)/\(item.steps.count)", systemImage: "checklist")
+                .help("步骤完成进度").accessibilityLabel("已完成 \(item.steps.filter(\.isCompleted).count) 个步骤，共 \(item.steps.count) 个")
+        }
+        if let rule = item.repeatRule {
+            Image(systemName: "repeat").help(repeatTitle(rule.frequency) + "重复")
+                .accessibilityLabel(repeatTitle(rule.frequency) + "重复")
+        }
     }
 
     @ViewBuilder private func itemActions(_ item: FocusTodo) -> some View {
@@ -308,6 +345,7 @@ struct FocusTodosView: View {
             }
             if !item.isCompleted {
                 Button("开始专注", systemImage: "play") { model.startFocus(item.id) }
+                Menu("专注时长", systemImage: "timer") { focusDurationActions(item) }
                 Divider()
                 scheduleActions(ids: [item.id], hasPlan: item.plannedDate != nil)
             }
@@ -323,6 +361,23 @@ struct FocusTodosView: View {
         }
     }
 
+    @ViewBuilder private func focusDurationActions(_ item: FocusTodo) -> some View {
+        ForEach([15, 25, 45], id: \.self) { minutes in
+            Button("专注 \(minutes) 分钟") { model.startFocus(item.id, minutes: minutes) }
+        }
+        Divider()
+        Button("自定义…") {
+            viewState.customFocusMinutes = String(Int(model.state.focusDuration / 60))
+            viewState.customFocusID = item.id
+        }
+    }
+
+    private func focusDurationPresented(for id: UUID) -> Binding<Bool> {
+        Binding(get: { viewState.customFocusID == id }, set: { presented in
+            if !presented && viewState.customFocusID == id { viewState.customFocusID = nil }
+        })
+    }
+
     @ViewBuilder private var selectionActions: some View {
         if model.section == .trash {
             Button("恢复 \(viewState.selectedIDs.count) 项") {
@@ -333,6 +388,10 @@ struct FocusTodosView: View {
             Button(model.section == .completed ? "恢复选中事项" : "完成选中事项") {
                 model.setTodosCompleted(Array(viewState.selectedIDs), model.section != .completed)
                 viewState.selectedIDs.removeAll()
+            }
+            let ids = model.visibleTodos.filter { viewState.selectedIDs.contains($0.id) && $0.isPending }.map(\.id)
+            if ids.count > 1 {
+                Button("依次专注", systemImage: "text.line.first.and.arrowtriangle.forward") { model.startFocusQueue(ids) }
             }
             if model.section != .completed {
                 scheduleActions(ids: Array(viewState.selectedIDs), hasPlan: true)
@@ -379,6 +438,9 @@ struct FocusTodosView: View {
                     }
                 }
                 .menuStyle(.borderlessButton).fixedSize()
+                Menu { selectionActions } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("批量操作").accessibilityLabel("选中事项操作")
                 Button {
                     model.trashTodos(Array(viewState.selectedIDs)); viewState.selectedIDs.removeAll()
                 } label: { Image(systemName: "trash") }
@@ -458,7 +520,7 @@ struct FocusTodosView: View {
 
     private func deleteSelection() {
         guard !(NSApp.keyWindow?.firstResponder is NSTextView), model.section != .trash,
-              !model.isBusy, !viewState.selectedIDs.isEmpty else { return }
+              model.todoDraft == nil, !model.isBusy, !viewState.selectedIDs.isEmpty else { return }
         model.trashTodos(Array(viewState.selectedIDs))
         viewState.selectedIDs.removeAll()
     }
@@ -499,6 +561,7 @@ struct FocusTodosView: View {
 private struct TodoEditor: View {
     @ObservedObject var model: FocusModel
     @SwiftUI.FocusState private var titleFocused: Bool
+    @SwiftUI.FocusState private var focusedStepID: UUID?
     @StateObject private var editorState = TodoEditorState()
 
     private func binding<Value>(_ keyPath: WritableKeyPath<TodoDraft, Value>, fallback: Value) -> Binding<Value> {
@@ -526,6 +589,8 @@ private struct TodoEditor: View {
             if model.todoDraft?.dueDate != nil { dueField }
             if model.todoDraft?.reminderDate != nil { reminderField }
             if editorState.showEstimate || model.todoDraft?.minutes.isEmpty == false { estimateField }
+            if editorState.showSteps || model.todoDraft?.steps.isEmpty == false { stepsField }
+            if editorState.showRepeat || model.todoDraft?.repeatRule != nil { repeatField }
 
             HStack {
                 if canAddAttribute {
@@ -545,12 +610,22 @@ private struct TodoEditor: View {
                         if !editorState.showEstimate && model.todoDraft?.minutes.isEmpty != false {
                             Button("预计时长", systemImage: "hourglass") { editorState.showEstimate = true }
                         }
+                        if !editorState.showSteps && model.todoDraft?.steps.isEmpty != false {
+                            Button("步骤", systemImage: "checklist") { addStep() }
+                        }
+                        if !editorState.showRepeat && model.todoDraft?.repeatRule == nil {
+                            Button("重复", systemImage: "repeat") {
+                                repeatFrequency.wrappedValue = .daily
+                                editorState.showRepeat = true
+                            }
+                        }
                     } label: { Label("添加属性", systemImage: "plus") }
                     .menuStyle(.borderlessButton).fixedSize()
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
+            focusSummary
             if let validationHint {
                 Text(validationHint).font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -569,6 +644,7 @@ private struct TodoEditor: View {
         .font(.system(size: 12))
         .onAppear {
             editorState.showEstimate = model.todoDraft?.minutes.isEmpty == false
+            if model.todoDraft?.steps.contains(where: { !$0.isValid }) == true { editorState.showSteps = true }
             titleFocused = true
         }
         .onExitCommand(perform: requestCancel)
@@ -639,6 +715,138 @@ private struct TodoEditor: View {
         }
     }
 
+    private var stepsField: some View {
+        DisclosureGroup(isExpanded: $editorState.showSteps) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(model.todoDraft?.steps ?? []) { step in
+                    HStack(spacing: 7) {
+                        Toggle("完成步骤", isOn: stepBinding(step.id, \.isCompleted, fallback: false))
+                            .toggleStyle(.checkbox).labelsHidden()
+                            .accessibilityLabel("完成步骤：" + (step.title.isEmpty ? "未命名步骤" : step.title))
+                        TextField("下一步", text: stepBinding(step.id, \.title, fallback: ""))
+                            .textFieldStyle(.plain).focused($focusedStepID, equals: step.id)
+                            .strikethrough(step.isCompleted)
+                            .accessibilityLabel("步骤内容").accessibilityIdentifier("todo-step-title-\(step.id.uuidString)")
+                            .onSubmit(addStep)
+                        removeButton("移除步骤") { model.todoDraft?.steps.removeAll { $0.id == step.id } }
+                    }
+                    .font(.system(size: 12))
+                    .accessibilityElement(children: .contain)
+                }
+                if (model.todoDraft?.steps.count ?? 0) < FocusTodo.maximumStepCount {
+                    Button(action: addStep) { Label("添加步骤", systemImage: "plus") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("todo-add-step")
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 6) {
+                Label("步骤", systemImage: "checklist")
+                if let steps = model.todoDraft?.steps, !steps.isEmpty {
+                    Text("\(steps.filter(\.isCompleted).count)/\(steps.count)").monospacedDigit()
+                }
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func stepBinding<Value>(_ id: UUID, _ keyPath: WritableKeyPath<TodoStep, Value>, fallback: Value) -> Binding<Value> {
+        Binding(get: { model.todoDraft?.steps.first(where: { $0.id == id })?[keyPath: keyPath] ?? fallback }, set: { value in
+            guard let index = model.todoDraft?.steps.firstIndex(where: { $0.id == id }) else { return }
+            model.todoDraft?.steps[index][keyPath: keyPath] = value
+        })
+    }
+
+    private func addStep() {
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.hasMarkedText() { return }
+        guard !model.isBusy, let steps = model.todoDraft?.steps else { return }
+        editorState.showSteps = true
+        if let unfinished = steps.first(where: { !$0.isValid }) {
+            focusedStepID = unfinished.id
+            return
+        }
+        guard steps.count < FocusTodo.maximumStepCount else { return }
+        let step = TodoStep(title: "")
+        model.todoDraft?.steps.append(step)
+        focusedStepID = step.id
+    }
+
+    private var repeatField: some View {
+        DisclosureGroup(isExpanded: $editorState.showRepeat) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("频率", selection: repeatFrequency) {
+                    Text("不重复").tag(nil as TodoRepeatFrequency?)
+                    ForEach(TodoRepeatFrequency.allCases, id: \.self) { frequency in
+                        Text(repeatTitle(frequency)).tag(Optional(frequency))
+                    }
+                }
+                .pickerStyle(.menu).accessibilityIdentifier("todo-repeat-frequency")
+                if let rule = model.todoDraft?.repeatRule {
+                    HStack(spacing: 8) {
+                        Text("起始").foregroundStyle(.secondary)
+                        DatePicker("重复起始日期", selection: repeatAnchor, displayedComponents: .date)
+                            .datePickerStyle(.field).labelsHidden()
+                            .environment(\.calendar, repeatCalendar)
+                            .environment(\.timeZone, repeatCalendar.timeZone)
+                            .accessibilityLabel("重复起始日期").accessibilityIdentifier("todo-repeat-anchor")
+                        Spacer(minLength: 0)
+                    }
+                    if rule.timeZoneIdentifier != TimeZone.current.identifier {
+                        Text(rule.timeZoneIdentifier).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            Label(model.todoDraft?.repeatRule.map { repeatTitle($0.frequency) + "重复" } ?? "重复", systemImage: "repeat")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var repeatCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        if let identifier = model.todoDraft?.repeatRule?.timeZoneIdentifier, let zone = TimeZone(identifier: identifier) {
+            calendar.timeZone = zone
+        } else { calendar.timeZone = .current }
+        return calendar
+    }
+
+    private var repeatFrequency: Binding<TodoRepeatFrequency?> {
+        Binding(get: { model.todoDraft?.repeatRule?.frequency }, set: { frequency in
+            guard let frequency else {
+                model.todoDraft?.repeatRule = nil; model.todoDraft?.repeatScheduledDate = nil
+                return
+            }
+            let old = model.todoDraft?.repeatRule
+            let anchor = old?.anchorDate ?? repeatCalendar.startOfDay(for: Date())
+            model.todoDraft?.repeatRule = TodoRepeatRule(frequency: frequency, anchorDate: anchor,
+                                                       timeZoneIdentifier: old?.timeZoneIdentifier ?? TimeZone.current.identifier)
+            if model.todoDraft?.repeatScheduledDate == nil { model.todoDraft?.repeatScheduledDate = anchor }
+        })
+    }
+
+    private var repeatAnchor: Binding<Date> {
+        Binding(get: { model.todoDraft?.repeatRule?.anchorDate ?? repeatCalendar.startOfDay(for: Date()) }, set: { date in
+            guard let rule = model.todoDraft?.repeatRule else { return }
+            let anchor = repeatCalendar.startOfDay(for: date)
+            model.todoDraft?.repeatRule = TodoRepeatRule(frequency: rule.frequency, anchorDate: anchor,
+                                                       timeZoneIdentifier: rule.timeZoneIdentifier)
+            model.todoDraft?.repeatScheduledDate = anchor
+        })
+    }
+
+    @ViewBuilder private var focusSummary: some View {
+        if let id = model.todoDraft?.id, let summary = model.summary(for: id), summary.sessionCount > 0 {
+            let seconds = Int(summary.totalSeconds)
+            let duration = seconds < 60 ? "\(seconds) 秒" : seconds < 3600 ? "\(seconds / 60) 分钟" : "\(seconds / 3600) 小时 \(seconds % 3600 / 60) 分钟"
+            Label("已记录 \(duration) · \(summary.sessionCount) 次专注", systemImage: "clock")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .help("其中 \(summary.completedSessionCount) 次到点结束")
+                .accessibilityIdentifier("todo-focus-summary")
+        }
+    }
+
     private func dateBinding(_ keyPath: WritableKeyPath<TodoDraft, Date?>) -> Binding<Date> {
         Binding(get: { model.todoDraft?[keyPath: keyPath] ?? Date() }, set: { model.todoDraft?[keyPath: keyPath] = $0 })
     }
@@ -652,6 +860,8 @@ private struct TodoEditor: View {
         guard let draft = model.todoDraft else { return false }
         return draft.plannedDate == nil || draft.dueDate == nil || draft.reminderDate == nil
             || (!editorState.showEstimate && draft.minutes.isEmpty)
+            || (!editorState.showSteps && draft.steps.isEmpty)
+            || (!editorState.showRepeat && draft.repeatRule == nil)
     }
 
     private var validationHint: String? {
@@ -661,22 +871,13 @@ private struct TodoEditor: View {
         if !draft.minutes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && FocusTodo.parseMinutes(draft.minutes) == nil {
             return "预计时长为 1–\(FocusTodo.minutesRange.upperBound) 分钟"
         }
+        if draft.steps.contains(where: { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return "填写步骤内容，或移除空白步骤" }
+        if draft.steps.contains(where: { $0.title.count > TodoStep.maximumTitleLength }) { return "步骤最多 \(TodoStep.maximumTitleLength) 字" }
         if let date = draft.reminderDate, date <= Date() { return "提醒时间已过去" }
         return nil
     }
 
-    private var hasChanges: Bool {
-        guard let draft = model.todoDraft else { return false }
-        guard let item = model.state.todos.first(where: { $0.id == draft.id }) else {
-            return !draft.title.isEmpty || !draft.notes.isEmpty || !draft.minutes.isEmpty
-                || draft.plannedDate != nil || draft.dueDate != nil || draft.reminderDate != nil
-        }
-        return draft.title != item.title || draft.notes != item.notes
-            || draft.minutes != (item.estimatedMinutes.map(String.init) ?? "")
-            || draft.listID != item.listID || draft.plannedDate != item.plannedDate
-            || draft.dueDate != item.dueDate || draft.hasDueTime != item.hasDueTime
-            || draft.reminderDate != item.reminderDate
-    }
+    private var hasChanges: Bool { model.todoDraft?.hasUnsavedChanges ?? false }
 
     private func requestCancel() {
         guard !model.isBusy else { return }
@@ -688,9 +889,78 @@ private struct TodoEditor: View {
 private final class TodoListViewState: ObservableObject {
     @Published var selectedIDs: Set<UUID> = []
     @Published var selectionAnchor: UUID?
+    @Published var customFocusID: UUID?
+    @Published var customFocusMinutes = "25"
+
+    var focusMinutes: Int? {
+        guard let minutes = FocusTodo.parseMinutes(customFocusMinutes), (1...180).contains(minutes) else { return nil }
+        return minutes
+    }
+}
+
+private struct TodoFocusDurationEditor: View {
+    @ObservedObject var model: FocusModel
+    @ObservedObject var viewState: TodoListViewState
+    let itemID: UUID
+    @SwiftUI.FocusState private var inputFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("本轮专注").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 8) {
+                TextField("25", text: $viewState.customFocusMinutes)
+                    .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                    .font(.system(size: 24, weight: .regular)).monospacedDigit()
+                    .frame(width: 85).focused($inputFocused)
+                    .onSubmit(start)
+                    .accessibilityLabel("本轮专注分钟数").accessibilityIdentifier("todo-focus-minutes")
+                    .help("1–180 分钟")
+                Text("分钟").font(.system(size: 13)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Stepper("调整分钟数", value: Binding(
+                    get: { viewState.focusMinutes ?? 25 },
+                    set: { viewState.customFocusMinutes = String($0) }
+                ), in: 1...180)
+                .labelsHidden().fixedSize().disabled(viewState.focusMinutes == nil)
+                .accessibilityLabel("调整本轮专注分钟数")
+            }
+            if viewState.focusMinutes == nil {
+                Text("输入 1–180 的整数").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Spacer()
+                Button("取消") { viewState.customFocusID = nil }
+                Button("开始", action: start)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewState.focusMinutes == nil || model.isBusy)
+            }
+            .controlSize(.small)
+        }
+        .padding(20).frame(width: 238)
+        .defaultFocus($inputFocused, true)
+        .onAppear { inputFocused = true }
+        .onExitCommand { viewState.customFocusID = nil }
+    }
+
+    private func start() {
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.hasMarkedText() { return }
+        guard viewState.customFocusID == itemID, !model.isBusy, let minutes = viewState.focusMinutes else { return }
+        viewState.customFocusID = nil
+        model.startFocus(itemID, minutes: minutes)
+    }
 }
 
 private final class TodoEditorState: ObservableObject {
     @Published var showEstimate = false
     @Published var confirmDiscard = false
+    @Published var showSteps = false
+    @Published var showRepeat = false
+}
+
+private func repeatTitle(_ frequency: TodoRepeatFrequency) -> String {
+    switch frequency {
+    case .daily: "每日"
+    case .weekly: "每周"
+    case .monthly: "每月"
+    }
 }

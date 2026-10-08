@@ -3,8 +3,11 @@ import SwiftUI
 struct FocusSettings: View {
     @ObservedObject var model: FocusModel
     @ObservedObject var appearance: FocusAppearanceController
+    var quickEntry: QuickEntryController? = nil
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 20) {
             Picker("外观", selection: $appearance.selection) {
                 ForEach(FocusAppearance.allCases, id: \.self) { item in
@@ -22,6 +25,17 @@ struct FocusSettings: View {
                 Divider()
             }
             DefaultDurationSetting(model: model)
+            if let quickEntry { QuickEntrySettings(controller: quickEntry) }
+            Divider()
+            HStack {
+                Label("待办归档", systemImage: "externaldrive")
+                Spacer()
+                Button("导入…") {
+                    openWindow(id: "main")
+                    model.importTodos()
+                }
+                Button("导出…") { model.exportTodos() }
+            }.disabled(model.isBusy)
             Label("桌面小组件", systemImage: "rectangle.3.group").font(.headline)
             if model.shared {
                 Text("右键桌面 → 编辑小组件 → Moro")
@@ -43,7 +57,9 @@ struct FocusSettings: View {
         }
         .font(.system(size: 13))
         .padding(28)
-        .frame(width: 370)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: 420, height: 560)
         .foregroundStyle(.primary)
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(\.colorScheme, appearance.colorScheme)

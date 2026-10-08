@@ -34,15 +34,18 @@ public enum FocusAction: Sendable {
     case selectTarget(FocusTarget)
 }
 
-/// Compatibility receipt for completion-only callers. It retains one task,
-/// never the entire list, timer state, or history.
+/// Compatibility receipt for completion-only callers. It retains affected tasks
+/// (including a generated occurrence), never the whole list, timer, or history.
 public struct FocusTodoCompletionUndo: Equatable, Sendable {
     public let item: FocusTodo
+    let record: TodoUndoRecord
 
     init?(id: UUID, previous: FocusState, updated: FocusState) {
         guard let item = previous.todos.first(where: { $0.id == id && !$0.isCompleted && !$0.isDeleted }),
-              updated.todos.contains(where: { $0.id == id && $0.isCompleted && !$0.isDeleted }) else { return nil }
+              updated.todos.contains(where: { $0.id == id && $0.isCompleted && !$0.isDeleted }),
+              let record = TodoUndoRecord(previous: previous, updated: updated) else { return nil }
         self.item = item
+        self.record = record
     }
 }
 
@@ -70,7 +73,7 @@ public struct TodoUndoRecord: Equatable, Sendable {
     /// Conservative text-payload estimate used to bound the UI's undo history.
     public var estimatedByteCount: Int {
         items.reduce(0) { total, change in
-            total + [change.before, change.after].compactMap { $0 }.reduce(0) { $0 + $1.title.utf8.count + $1.notes.utf8.count + 512 }
+            total + [change.before, change.after].compactMap { $0 }.reduce(0) { $0 + $1.estimatedStorageBytes }
         } + collections.reduce(0) { total, change in
             total + [change.before, change.after].compactMap { $0 }.reduce(0) { $0 + $1.title.utf8.count + 128 }
         }
@@ -119,6 +122,21 @@ public struct FocusLog: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+public struct TodoFocusSummary: Equatable, Sendable {
+    public var totalSeconds: TimeInterval = 0
+    public var sessionCount: Int = 0
+    public var completedSessionCount: Int = 0
+    public var lastFocusedAt: Date?
+    public init() {}
+}
+
+struct PreparedTodoChange {
+    let item: FocusTodo
+    let nextOccurrence: FocusTodo?
+    let index: Int?
+    let completesCurrentTask: Bool
+}
+
 public enum FocusStateError: Error, LocalizedError {
     case invalidData
 
@@ -131,7 +149,7 @@ public struct FocusState: Codable, Equatable, Sendable {
     /// A whole list may exceed the single-task / free-timer limit.
     public static let maximumPlanDuration = maximumDuration * 100
     public static let maximumLogCount = 1_000
-    public static let currentVersion = 4
+    public static let currentVersion = 5
 
     public var version: Int
     public var mode: FocusMode
@@ -150,7 +168,7 @@ public struct FocusState: Codable, Equatable, Sendable {
     public var restDuration: TimeInterval
     /// Optional for compatibility with version 1 files written before reminders.
     public var completedNaturally: Bool?
-    /// Version 4 adds optional estimates, planning, collections, and reversible trash.
+    /// Version 5 adds single-level steps and completion-driven recurring occurrences.
     public var todoList: FocusTodoList?
     /// Freeze membership at start; checklist edits never change a running session.
     public var sessionTodoIDs: [UUID]?
@@ -183,6 +201,25 @@ public struct FocusState: Codable, Equatable, Sendable {
     }
 
     public var todos: [FocusTodo] { todoList?.items ?? [] }
+    /// Summaries cover retained logs with one explicit task association. A legacy
+    /// multi-task session is not duplicated or speculatively divided between tasks.
+    public var todoFocusSummaries: [UUID: TodoFocusSummary] {
+        var summaries: [UUID: TodoFocusSummary] = [:]
+        var seen = Set<UUID>()
+        for log in logs {
+            guard seen.insert(log.id).inserted, let ids = log.todoIDs, ids.count == 1,
+                  log.seconds.isFinite, log.seconds >= 0 else { continue }
+            let id = ids[0]
+            var summary = summaries[id] ?? TodoFocusSummary()
+            summary.totalSeconds += log.seconds
+            summary.sessionCount += 1
+            if log.completed { summary.completedSessionCount += 1 }
+            summary.lastFocusedAt = max(summary.lastFocusedAt ?? log.endedAt, log.endedAt)
+            summaries[id] = summary
+        }
+        return summaries
+    }
+
     public var focusTarget: FocusTarget { todoList?.target ?? .free }
     public var plannedFocusDuration: TimeInterval {
         guard let list = todoList, !list.selected.isEmpty else { return focusDuration }
@@ -295,10 +332,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             item.completedAt = completed ? now : nil
             result.upsert(item, at: now)
         case .undoTodoCompletion(let undo):
-            guard var item = result.todos.first(where: { $0.id == undo.item.id && $0.isCompleted && !$0.isDeleted }) else { return result }
-            item.isCompleted = false
-            item.completedAt = nil
-            result.upsert(item, at: now)
+            if let restored = try? result.applyingTodoUndo(undo.record) { result = restored }
         case .upsertCollection(let collection):
             guard collection.isValid else { return result }
             let collections = result.todoList?.collections ?? []
@@ -370,6 +404,7 @@ public struct FocusState: Codable, Equatable, Sendable {
                     || ($0.dueDate != nil && !$0.hasDueTime)
             })) { throw FocusStateError.invalidData }
             if version < 3 && list.items.contains(where: { $0.dueDate != nil }) { throw FocusStateError.invalidData }
+            if version < 5 && list.items.contains(where: \.hasVersion5Metadata) { throw FocusStateError.invalidData }
             if let override = list.durationOverride {
                 guard list.target != .free, override.isFinite, (Self.minimumDuration...Self.maximumPlanDuration).contains(override) else { throw FocusStateError.invalidData }
             }
@@ -413,15 +448,19 @@ public struct FocusState: Codable, Equatable, Sendable {
     func migratedToCurrent() -> FocusState {
         guard version < Self.currentVersion else { return self }
         var result = self
+        // Only the timer-first v1-v3 formats need planning normalization. v4
+        // already has explicit manual order and independent focus durations.
+        if version < 4 {
+            if var list = result.todoList {
+                for index in list.items.indices { list.items[index].sortOrder = index }
+                if let override = list.durationOverride, override > Self.maximumDuration { list.durationOverride = nil }
+                result.todoList = list
+            }
+            if result.status == .idle && result.mode == .focus {
+                result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
+            }
+        }
         result.version = Self.currentVersion
-        if var list = result.todoList {
-            for index in list.items.indices { list.items[index].sortOrder = index }
-            if let override = list.durationOverride, override > Self.maximumDuration { list.durationOverride = nil }
-            result.todoList = list
-        }
-        if result.status == .idle && result.mode == .focus {
-            result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
-        }
         return result
     }
 
@@ -478,25 +517,50 @@ public struct FocusState: Codable, Equatable, Sendable {
         return result
     }
 
-    private mutating func upsert(_ supplied: FocusTodo, at now: Date) {
+    /// Shared by pure transitions and the store's throwing preflight. Generation
+    /// and capacity checks happen before a completion can stop real focus time.
+    func preparingTodoUpsert(_ supplied: FocusTodo, at now: Date) throws -> PreparedTodoChange {
         var item = supplied
         item.title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard item.isValid, item.listID.map({ id in todoList?.collections.contains(where: { $0.id == id }) == true }) ?? true else { return }
+        guard item.isValid,
+              item.listID.map({ id in todoList?.collections.contains(where: { $0.id == id }) == true }) ?? true else {
+            throw FocusStoreError.invalidTodoAction
+        }
         let index = todos.firstIndex(where: { $0.id == item.id })
         let previous = index.map { todos[$0] }
-        let pendingCount = todos.filter(\.isPending).count
-        guard !item.isPending || previous?.isPending == true || pendingCount < FocusTodo.maximumCount,
-              index != nil || todos.count < FocusTodo.maximumStoredCount else { return }
-        if item.isCompleted && previous?.isCompleted == false {
+        let newlyCompleted = item.isCompleted && !item.isDeleted && previous?.isPending == true
+        var nextOccurrence: FocusTodo?
+        if newlyCompleted {
             item.completedAt = now
-            // Completing the task is an explicit finish; never recreate this
-            // elapsed time or resume a real session when the user undoes it.
-            if mode == .focus && isActive && sessionTodoIDs == [item.id] { end(at: now) }
+            if item.repeatRule != nil && item.nextOccurrenceID == nil {
+                item.nextOccurrenceID = item.generatedNextOccurrenceID
+                if !todos.contains(where: { $0.id == item.generatedNextOccurrenceID }) {
+                    guard let generated = item.nextOccurrence(completedAt: now) else { throw FocusStoreError.repeatDateUnavailable }
+                    nextOccurrence = generated
+                }
+            }
         } else if !item.isCompleted { item.completedAt = nil }
-        if let index { editList { $0.items[index] = item } }
-        else {
-            item.sortOrder = min(1_000_000_000, (todos.map(\.sortOrder).max() ?? -1) + 1)
-            editList { $0.items.append(item) }
+        let pendingCount = todos.filter(\.isPending).count - (previous?.isPending == true ? 1 : 0)
+            + (item.isPending ? 1 : 0) + (nextOccurrence?.isPending == true ? 1 : 0)
+        let totalCount = todos.count + (index == nil ? 1 : 0) + (nextOccurrence == nil ? 0 : 1)
+        guard pendingCount <= FocusTodo.maximumCount, totalCount <= FocusTodo.maximumStoredCount else {
+            throw FocusStoreError.todoCapacityReached
+        }
+        if index == nil { item.sortOrder = min(1_000_000_000, (todos.map(\.sortOrder).max() ?? -1) + 1) }
+        if nextOccurrence != nil {
+            nextOccurrence?.sortOrder = min(1_000_000_000, max(todos.map(\.sortOrder).max() ?? -1, item.sortOrder) + 1)
+        }
+        return PreparedTodoChange(item: item, nextOccurrence: nextOccurrence, index: index,
+                                  completesCurrentTask: newlyCompleted && mode == .focus && isActive && sessionTodoIDs == [item.id])
+    }
+
+    private mutating func upsert(_ supplied: FocusTodo, at now: Date) {
+        guard let change = try? preparingTodoUpsert(supplied, at: now) else { return }
+        if change.completesCurrentTask { end(at: now) }
+        editList { list in
+            if let index = change.index { list.items[index] = change.item }
+            else { list.items.append(change.item) }
+            if let next = change.nextOccurrence { list.items.append(next) }
         }
     }
 

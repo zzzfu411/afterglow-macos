@@ -25,7 +25,11 @@ struct FocusWindow: View {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("搜索所有事项", text: $model.searchText)
                                 .textFieldStyle(.plain).focused($searchFocused)
-                                .onAppear { searchFocused = true }
+                                .task(id: model.searchRequest) {
+                                    searchFocused = false
+                                    await Task.yield()
+                                    searchFocused = true
+                                }
                                 .accessibilityLabel("搜索所有事项")
                             Button { model.searchText = ""; model.showSearch = false } label: { Image(systemName: "xmark.circle.fill") }
                                 .buttonStyle(.plain).foregroundStyle(.secondary).help("关闭搜索")
@@ -78,7 +82,6 @@ struct FocusWindow: View {
                 SettingsLink { Image(systemName: "slider.horizontal.3") }.help("设置").accessibilityLabel("设置")
             }
         }
-        .onChange(of: model.searchRequest) { _, _ in searchFocused = true }
         .onChange(of: phase) { _, value in if value == .active { model.refresh() } }
         .onChange(of: durationPicker.isPresented) { _, value in model.isEditingDuration = value }
         .alert("无法保存更改", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
@@ -96,7 +99,7 @@ struct FocusWindow: View {
         .alert("永久删除这些事项？", isPresented: Binding(get: { !model.pendingPurgeIDs.isEmpty }, set: { if !$0 { model.pendingPurgeIDs = [] } })) {
             Button("取消", role: .cancel) { model.pendingPurgeIDs = [] }
             Button("永久删除", role: .destructive) { model.confirmPurgeTodos() }
-        } message: { Text("将删除 \(model.pendingPurgeIDs.count) 项。退出 Moro 后将无法撤销，建议先导出备份。") }
+        } message: { Text("将删除 \(model.pendingPurgeIDs.count) 项。建议先导出归档。") }
         .alert("切换专注事项？", isPresented: Binding(get: { model.pendingFocusID != nil }, set: { if !$0 { model.pendingFocusID = nil } })) {
             Button("取消", role: .cancel) { model.pendingFocusID = nil }
             Button("结束并切换") { model.confirmSwitchFocus() }
@@ -151,14 +154,19 @@ struct CompactFocusBar: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.state.mode == .rest ? "休息" : (model.state.currentTask.isEmpty ? "自由专注" : model.state.currentTask))
                         .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    Text(model.state.status == .done ? "本轮结束" : model.state.status == .paused ? "已暂停" : "专注中")
+                    Text((model.queueProgress.map { $0 + " · " } ?? "") + (model.state.status == .done ? "本轮结束" : model.state.status == .paused ? "已暂停" : "专注中"))
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }
             .buttonStyle(.plain).help("查看当前事项").accessibilityLabel("查看当前专注事项")
+            .contextMenu {
+                if model.queueProgress != nil { Button("退出队列，保留当前专注") { model.clearFocusQueue() } }
+            }
             if model.state.status == .done {
-                Button("休息") { model.startRest() }.controlSize(.small)
+                if model.hasNextQueueItem {
+                    Button("下一项") { model.advanceFocusQueue() }.controlSize(.small)
+                } else { Button("休息") { model.startRest() }.controlSize(.small) }
                 Button { model.send(.reset) } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
                     .help("收起计时").accessibilityLabel("收起计时")
             } else {
@@ -171,6 +179,10 @@ struct CompactFocusBar: View {
                 Button { model.send(.finish) } label: { Image(systemName: "stop.fill").font(.system(size: 11)).frame(width: 24, height: 28) }
                     .help("结束（⌘.）").accessibilityLabel("结束本轮专注")
             }
+            if model.hasNextQueueItem && model.state.isActive {
+                Button { model.advanceFocusQueue() } label: { Image(systemName: "forward.end").frame(width: 24, height: 28) }
+                    .help("跳过并专注下一项；当前事项保持待办").accessibilityLabel("跳过并专注下一项")
+            }
             Button { model.showFocus = true } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11)).frame(width: 24, height: 28) }
                 .help("专注视图").accessibilityLabel("展开专注视图")
         }
@@ -182,12 +194,17 @@ struct CompactFocusBar: View {
 
 struct MenuPanel: View {
     @ObservedObject var model: FocusModel
+    var quickEntry: QuickEntryController? = nil
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Moro").font(.headline)
                 Spacer()
+                if let quickEntry {
+                    Button { quickEntry.show() } label: { Image(systemName: "square.and.pencil") }
+                        .help("快速录入").accessibilityLabel("快速录入")
+                }
                 Button {
                     openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
                 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
@@ -326,6 +343,7 @@ private struct DurationEditor: View {
 }
 
 struct TimerCommands: Commands {
+    var quickEntry: QuickEntryController? = nil
     @FocusedObject private var model: FocusModel?
     @Environment(\.openWindow) private var openWindow
     private var textEditor: NSTextView? { NSApp.keyWindow?.firstResponder as? NSTextView }
@@ -334,6 +352,7 @@ struct TimerCommands: Commands {
         CommandGroup(after: .newItem) {
             Button("添加事项") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true); model?.newTodo() }
                 .keyboardShortcut("n").disabled(model == nil)
+            if let quickEntry { Button("快速录入…") { quickEntry.show() } }
             Divider()
             Button("导入待办…") { model?.importTodos() }.disabled(model == nil || model?.isBusy == true)
             Button("导出待办…") { model?.exportTodos() }.disabled(model == nil || model?.isBusy == true)

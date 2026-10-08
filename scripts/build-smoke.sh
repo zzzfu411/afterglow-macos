@@ -7,7 +7,7 @@ mkdir -p "$APP/Contents/MacOS" "$BUILD/module-cache"
 swiftc -swift-version 5 -parse-as-library -O \
   -target "$(uname -m)-apple-macos14.0" -module-cache-path "$BUILD/module-cache" \
   "$ROOT"/Shared/*.swift "$ROOT/App/FocusWindow.swift" "$ROOT/App/FocusTodosView.swift" "$ROOT/App/FocusSettings.swift" "$ROOT/App/FocusLayout.swift" \
-  "$ROOT/App/NativeMaterial.swift" "$ROOT/App/FocusModel.swift" "$ROOT/App/TodoPresentation.swift" "$ROOT/App/TodoTransfer.swift" "$ROOT/App/TodoNavigationView.swift" "$ROOT/App/TodoReminders.swift" "$ROOT/App/FocusReminders.swift" \
+  "$ROOT/App/NativeMaterial.swift" "$ROOT/App/FocusModel.swift" "$ROOT/App/TodoPresentation.swift" "$ROOT/App/TodoTransfer.swift" "$ROOT/App/QuickEntry.swift" "$ROOT/App/TodoNavigationView.swift" "$ROOT/App/TodoReminders.swift" "$ROOT/App/FocusReminders.swift" \
   "$ROOT/App/FocusStoreObservation.swift" "$ROOT/Tests/SmokeApp.swift" \
   -o "$APP/Contents/MacOS/MoroSmoke"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -18,8 +18,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Moro Lab</string>
 <key>CFBundleExecutable</key><string>MoroSmoke</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.1</string>
-<key>CFBundleVersion</key><string>12</string>
+<key>CFBundleShortVersionString</key><string>0.7.0</string>
+<key>CFBundleVersion</key><string>14</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -13,6 +13,7 @@ public enum FocusStoreError: Error, LocalizedError {
     case undoConflict
     case importConflict
     case editConflict
+    case repeatDateUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +35,8 @@ public enum FocusStoreError: Error, LocalizedError {
             return "预览后相关事项或清单发生了变化，请重新预览导入。当前数据已保留。"
         case .editConflict:
             return "此事项已被其他操作修改，请重新打开后编辑。当前数据已保留。"
+        case .repeatDateUnavailable:
+            return "无法计算下一次重复日期，请调整重复设置。当前事项未更改。"
         }
     }
 }
@@ -122,13 +125,13 @@ public final class FocusStore: @unchecked Sendable {
     /// Capture the exact change under the same lock as the write, including
     /// edits another process made before this completion click arrived.
     public func completeTodo(_ id: UUID, at now: Date = Date()) throws -> (state: FocusState, undo: FocusTodoCompletionUndo?) {
-        var undo: FocusTodoCompletionUndo?
+        var previousForUndo: FocusState?
         let state = try transaction { previous in
-            let updated = previous.applying(.setTodoCompleted(id, true), at: now)
-            undo = FocusTodoCompletionUndo(id: id, previous: previous, updated: updated)
-            return updated
+            previousForUndo = previous
+            try Self.checkTodoAction(.setTodoCompleted(id, true), in: previous, at: now)
+            return previous.applying(.setTodoCompleted(id, true), at: now)
         }
-        return (state, undo)
+        return (state, previousForUndo.flatMap { FocusTodoCompletionUndo(id: id, previous: $0, updated: state) })
     }
 
     /// Batch edits and their undo receipt are committed under the same lock.
@@ -142,7 +145,7 @@ public final class FocusStore: @unchecked Sendable {
             previousForUndo = previous
             var next = previous.applying(.settle, at: now)
             for action in actions {
-                try Self.checkTodoAction(action, in: next)
+                try Self.checkTodoAction(action, in: next, at: now)
                 next = next.applying(action, at: now)
             }
             return next
@@ -201,30 +204,29 @@ public final class FocusStore: @unchecked Sendable {
         return lhs.allSatisfy { expected[$0.id] == $0 }
     }
 
-    private static func checkTodoAction(_ action: FocusAction, in state: FocusState) throws {
+    private static func checkTodoAction(_ action: FocusAction, in state: FocusState, at now: Date) throws {
         switch action {
         case .addTodo(let item), .upsertTodo(let item):
-            guard item.isValid,
-                  item.listID.map({ id in state.todoList?.collections.contains(where: { $0.id == id }) == true }) ?? true else {
-                throw FocusStoreError.invalidTodoAction
-            }
-            let previous = state.todos.first { $0.id == item.id }
-            guard previous != nil || state.todos.count < FocusTodo.maximumStoredCount,
-                  !item.isPending || previous?.isPending == true || state.todos.filter(\.isPending).count < FocusTodo.maximumCount else {
-                throw FocusStoreError.todoCapacityReached
-            }
+            _ = try state.preparingTodoUpsert(item, at: now)
         case .replaceTodo(let expected, let replacement):
             guard expected.id == replacement.id,
                   state.todos.first(where: { $0.id == expected.id }) == expected else { throw FocusStoreError.editConflict }
-            try checkTodoAction(.upsertTodo(replacement), in: state)
+            try checkTodoAction(.upsertTodo(replacement), in: state, at: now)
         case .editTodo(_, let title, let minutes, let dueDate):
             guard FocusTodo(title: title, minutes: minutes, dueDate: dueDate).isValid else { throw FocusStoreError.invalidTodoAction }
         case .restoreTodo(let id):
-            if let item = state.todos.first(where: { $0.id == id }), item.isDeleted && !item.isCompleted,
-               state.todos.filter(\.isPending).count >= FocusTodo.maximumCount { throw FocusStoreError.todoCapacityReached }
-        case .setTodoCompleted(let id, false):
-            if let item = state.todos.first(where: { $0.id == id }), item.isCompleted && !item.isDeleted,
-               state.todos.filter(\.isPending).count >= FocusTodo.maximumCount { throw FocusStoreError.todoCapacityReached }
+            if var item = state.todos.first(where: { $0.id == id && $0.isDeleted }) {
+                item.deletedAt = nil
+                _ = try state.preparingTodoUpsert(item, at: now)
+            }
+        case .setTodoCompleted(let id, let completed):
+            if var item = state.todos.first(where: { $0.id == id && !$0.isDeleted }), item.isCompleted != completed {
+                item.isCompleted = completed
+                item.completedAt = completed ? now : nil
+                _ = try state.preparingTodoUpsert(item, at: now)
+            }
+        case .undoTodoCompletion(let undo):
+            _ = try state.applyingTodoUndo(undo.record)
         case .upsertCollection(let collection):
             guard collection.isValid else { throw FocusStoreError.invalidTodoAction }
             let collections = state.todoList?.collections ?? []
@@ -285,14 +287,16 @@ public final class FocusStore: @unchecked Sendable {
                 if previous.version < FocusState.currentVersion, let originalBytes {
                     let backupDirectory = directory.appendingPathComponent("Backups", isDirectory: true)
                     try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
-                    let backup = backupDirectory.appendingPathComponent("pre-v4-v\(previous.version)-\(UUID().uuidString).json")
+                    let backup = backupDirectory.appendingPathComponent("pre-v\(FocusState.currentVersion)-v\(previous.version)-\(UUID().uuidString).json")
                     try originalBytes.write(to: backup, options: .atomic)
                     guard try Data(contentsOf: backup) == originalBytes else { throw FocusStateError.invalidData }
                 }
                 // Rename atomically while retaining the lock on a separate file.
                 try bytes.write(to: file, options: .atomic)
+                try? TodoWidgetCache.write(state: persisted, directory: directory)
                 return persisted
             }
+            try? TodoWidgetCache.write(state: next, directory: directory)
             return next
         }
     }

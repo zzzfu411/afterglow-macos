@@ -27,6 +27,12 @@ jobs:
         run: ./scripts/test.sh
       - name: Reminders and event-driven runtime
         run: ./scripts/test-runtime.sh
+      - name: Todo reminders, archives, quick capture and widget snapshots
+        run: |
+          ./scripts/test-todo-reminders.sh
+          ./scripts/test-todo-transfer.sh
+          ./scripts/test-shortcuts.sh
+          ./scripts/test-widget-snapshot.sh
       - name: Native appearance and responsive layout
         run: ./scripts/test-window.sh
       - name: SwiftUI and WidgetKit compilation

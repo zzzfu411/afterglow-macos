@@ -25,6 +25,7 @@ struct TodoTransferTests {
         try purge()
         try capacity()
         try conditionalReplace()
+        try recurrenceArchives()
         print("PASS: \(count) todo archive/import/purge/conflict checks.")
     }
 
@@ -71,7 +72,7 @@ struct TodoTransferTests {
         throwsError("unknown collection reference rejected") { _ = try TodoTransfer.encode(invalid) }
         invalid = valid; invalid.todos[0].reminderDate = Date(timeIntervalSince1970: .infinity)
         throwsError("invalid reminder date rejected") { _ = try TodoTransfer.encode(invalid) }
-        invalid = valid; invalid.version = 2
+        invalid = valid; invalid.version = TodoArchive.currentVersion + 1
         throwsError("unknown archive schema rejected") { _ = try TodoTransfer.encode(invalid) }
         invalid = valid; invalid.format = "unrelated-format"
         throwsError("wrong format identifier rejected") { _ = try TodoTransfer.encode(invalid) }
@@ -261,4 +262,39 @@ struct TodoTransferTests {
         let mismatch = FocusTodo(title: "另一个 ID")
         throwsError("replace cannot change task identity") { _ = try first.performTodoAction(.replaceTodo(expected: trashed, replacement: mismatch), at: now) }
     }
+    static func recurrenceArchives() throws {
+        let dir = try directory("recurrence-archive")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FocusStore(directory: dir)
+        let task = FocusTodo(title: "导入重复", steps: [TodoStep(title: "准备", isCompleted: true)],
+                             repeatRule: TodoRepeatRule(frequency: .monthly, anchorDate: now, timeZoneIdentifier: "Asia/Shanghai"),
+                             repeatScheduledDate: now)
+        try store.performTodoAction(.upsertTodo(task), at: now)
+        let completed = try store.performTodoAction(.setTodoCompleted(task.id, true), at: now).state
+        let archive = try TodoTransfer.archive(from: completed, at: now)
+        expect(archive.version == 2, "new archives version steps and recurrence so older apps reject rather than erase fields")
+        let data = try TodoTransfer.encode(archive)
+        let decoded = try TodoTransfer.decode(data)
+        expect(decoded == archive, "archive round trip keeps steps, anchor, time zone and generation marker")
+        var old = TodoArchive(todos: [FocusTodo(title: "旧归档")], exportedAt: now); old.version = 1
+        let oldDecoded = try TodoTransfer.decode(TodoTransfer.encode(old))
+        expect(oldDecoded.todos[0].steps.isEmpty && oldDecoded.todos[0].repeatRule == nil, "v1 task archives still decode with empty new fields")
+        var invalid = archive; invalid.version = 1
+        throwsError("recurrence metadata cannot be written as old archive version") { _ = try TodoTransfer.encode(invalid) }
+        let other = FocusStore(directory: dir.appendingPathComponent("import"))
+        let imported = try TodoTransfer.mergeArchive(decoded, into: other, at: now)
+        expect(imported.state.todos == completed.todos, "import retains existing occurrence identities and step states")
+        try other.performTodoAction(.setTodoCompleted(task.id, false), at: now)
+        expect(try other.performTodoAction(.setTodoCompleted(task.id, true), at: now).state.todos.count == 2,
+               "reopening an imported completed occurrence cannot generate a duplicate child")
+        let next = imported.state.todos.first { $0.id == task.generatedNextOccurrenceID }!
+        var edited = next; edited.steps[0].isCompleted = true
+        try other.performTodoAction(.replaceTodo(expected: next, replacement: edited), at: now)
+        let sourceOnly = TodoArchive(todos: [task], exportedAt: now)
+        try TodoTransfer.mergeArchive(sourceOnly, into: other, at: now)
+        let deduplicated = try other.performTodoAction(.setTodoCompleted(task.id, true), at: now)
+        expect(deduplicated.state.todos.count == 2 && deduplicated.state.todos.first { $0.id == next.id }?.steps[0].isCompleted == true,
+               "importing an older source without marker cannot overwrite or duplicate an edited child")
+    }
+
 }

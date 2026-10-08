@@ -15,6 +15,11 @@ struct FocusStateTests {
             for _ in 0..<41 { try store.toggle(at: Date(timeIntervalSince1970: 100_000)) }
             return
         }
+        if args.count == 5, args[1] == "--complete-worker", let id = UUID(uuidString: args[3]), let timestamp = Double(args[4]) {
+            let store = FocusStore(directory: URL(fileURLWithPath: args[2]))
+            for _ in 0..<5 { try store.performTodoAction(.setTodoCompleted(id, true), at: Date(timeIntervalSince1970: timestamp)) }
+            return
+        }
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let original = FocusState(duration: 1500, task: "写作")
         try original.validate()
@@ -113,7 +118,13 @@ struct FocusStateTests {
         try testMigration(at: start)
         try testCapacity(at: start)
         try testCollections(at: start)
-        print("PASS: \(count) checks; includes 6 processes / 246 shared-store transactions.")
+        try testStepsAndRecurrence(at: start)
+        try testRepeatCalendar()
+        try testRepeatCapacity(at: start)
+        try testVersion4Migration(at: start)
+        try testFocusSummaries(at: start)
+        try testConcurrentRepeatCompletion(at: start)
+        print("PASS: \(count) checks; includes 6 processes / 246 toggles and 4 processes / 20 recurring completions.")
     }
 
     static func testTodos(at start: Date) throws {
@@ -122,7 +133,7 @@ struct FocusStateTests {
         let finished = FocusTodo(title: "整理桌面", estimatedMinutes: 5, isCompleted: true)
         let base = FocusState(duration: 900).applying(.addTodo(writing), at: start)
             .applying(.addTodo(reading), at: start).applying(.addTodo(finished), at: start)
-        expect(base.version == 4 && base.todos.count == 3 && base.todos[0].title == "写初稿", "new tasks use v4 and normalized titles")
+        expect(base.version == FocusState.currentVersion && base.todos.count == 3 && base.todos[0].title == "写初稿", "new tasks use the current schema and normalized titles")
         expect(base.todos[1].estimatedMinutes == nil && base.todos[1].minutes == 0, "title-only task needs no estimate")
         expect(base.todos[1].createdAt == start && base.todos[2].completedAt == nil, "new creation known, historic completion never invented")
         expect(base.applying(.addTodo(writing)) == base, "duplicate task ID rejected")
@@ -330,7 +341,7 @@ struct FocusStateTests {
                 let file = directory.appendingPathComponent("focus-state.json")
                 try bytes.write(to: file)
                 let migrated = try FocusStore(directory: directory).snapshot(at: start.addingTimeInterval(30))
-                expect(migrated.version == 4 && migrated.status == status, "v\(version) \(status) migrates to v4")
+                expect(migrated.version == FocusState.currentVersion && migrated.status == status, "v\(version) \(status) migrates to current schema")
                 expect(migrated.sessionID == legacy.sessionID && migrated.startedAt == legacy.startedAt
                        && migrated.sessionTodoIDs == legacy.sessionTodoIDs && migrated.sessionTask == legacy.sessionTask,
                        "migration preserves identity and session membership")
@@ -371,7 +382,7 @@ struct FocusStateTests {
         try Data("blocked backup directory".utf8).write(to: directory.appendingPathComponent("Backups"))
         expectThrows("migration cannot proceed without a successful backup") { _ = try FocusStore(directory: directory).snapshot(at: start) }
         expect(try Data(contentsOf: file) == legacyBytes, "backup failure leaves original legacy file unchanged")
-        var future = validLegacy; future.version = 5
+        var future = validLegacy; future.version = FocusState.currentVersion + 1
         let futureBytes = try encoder.encode(future)
         try futureBytes.write(to: file)
         expectThrows("future schema rejected without downgrade") { _ = try FocusStore(directory: directory).snapshot(at: start) }
@@ -448,6 +459,259 @@ struct FocusStateTests {
         expectThrows("invalid reorder cannot drop items") { _ = try store.performTodoAction(.reorderTodos([a.id, a.id]), at: start) }
         var unknown = FocusState(); unknown.todoList = FocusTodoList(); unknown.todoList?.items = [FocusTodo(title: "无效引用", listID: UUID())]
         expectThrows("invalid persisted collection references rejected") { try unknown.validate() }
+    }
+
+    static func testStepsAndRecurrence(at start: Date) throws {
+        let steps = [TodoStep(title: "准备", isCompleted: true), TodoStep(title: "检查")]
+        let rule = TodoRepeatRule(frequency: .daily, anchorDate: start, timeZoneIdentifier: "Asia/Shanghai")
+        let fixedID = UUID(uuidString: "01234567-89AB-CDEF-0123-456789ABCDEF")!
+        let task = FocusTodo(id: fixedID, title: "每日整理", estimatedMinutes: 30, notes: "重复保留备注",
+                             plannedDate: start, dueDate: start.addingTimeInterval(86_400), hasDueTime: false,
+                             reminderDate: start.addingTimeInterval(1800), createdAt: start,
+                             steps: steps, repeatRule: rule, repeatScheduledDate: start)
+        expect(task.isValid && task.steps.map(\.id) == steps.map(\.id), "steps preserve stable IDs within a task")
+        expect(try JSONDecoder().decode(FocusTodo.self, from: JSONEncoder().encode(task)) == task, "steps and repeat metadata round trip")
+        expect(task.generatedNextOccurrenceID == UUID(uuidString: "F459FD2D-55C6-8F67-8F5E-A11C86DAA002"), "recurrence child identity matches the stable on-disk namespace contract")
+        var invalid = task; invalid.steps.append(steps[0])
+        expect(!invalid.isValid, "duplicate step IDs rejected")
+        invalid = task; invalid.steps = [TodoStep(title: " ")]
+        expect(!invalid.isValid, "empty saved step rejected")
+        invalid = task; invalid.steps = [TodoStep(title: String(repeating: "x", count: 181))]
+        expect(!invalid.isValid, "long saved step rejected")
+        invalid = task; invalid.steps = (0...FocusTodo.maximumStepCount).map { TodoStep(title: "步骤 \($0)") }
+        expect(!invalid.isValid, "step count bounded to one hundred")
+        invalid = task; invalid.repeatRule?.timeZoneIdentifier = "Not/A_TimeZone"
+        expect(!invalid.isValid, "unknown recurrence time zone rejected")
+        invalid = task; invalid.nextOccurrenceID = task.id
+        expect(!invalid.isValid, "self-recurring identity rejected")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("moro-repeat-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FocusStore(directory: directory)
+        let other = FocusStore(directory: directory)
+        let added = try store.performTodoAction(.upsertTodo(task), at: start).state
+        expect(added.todos.count == 1, "creating a repeat rule does not generate another task")
+        var deferred = added.todos[0]; deferred.plannedDate = start.addingTimeInterval(5 * 86_400)
+        try store.performTodoAction(.replaceTodo(expected: added.todos[0], replacement: deferred), at: start)
+        expect(try store.snapshot(at: start).todos.count == 1, "deferring a repeating task never generates a backlog")
+        let running = try store.performActions([.selectTarget(.todo(task.id)), .start], at: start)
+        let completion = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start.addingTimeInterval(30))
+        let source = completion.state.todos.first { $0.id == task.id }!
+        let next = completion.state.todos.first { $0.id == task.generatedNextOccurrenceID }!
+        expect(completion.state.todos.count == 2 && source.nextOccurrenceID == next.id && next.isPending,
+               "completion creates exactly one linked pending occurrence")
+        expect(completion.state.logs.last?.seconds == 30 && completion.state.logs.last?.todoIDs == [task.id]
+               && completion.state.status == .done, "recurrence completion ends focus and logs once")
+        expect(next.title == task.title && next.notes == task.notes && next.estimatedMinutes == 30 && next.repeatRule == rule,
+               "next occurrence retains reusable task metadata")
+        expect(next.steps.allSatisfy { !$0.isCompleted } && next.steps.map(\.title) == steps.map(\.title)
+               && Set(next.steps.map(\.id)).isDisjoint(with: Set(steps.map(\.id))), "next occurrence resets steps with new stable identities")
+        expect(next.nextOccurrenceID == nil && next.completedAt == nil && next.deletedAt == nil && next.createdAt == start.addingTimeInterval(30),
+               "new occurrence does not inherit completion/deletion or generation marker")
+        expect(next.plannedDate == next.repeatScheduledDate && next.plannedDate! > start,
+               "new occurrence has one future planned day")
+        expect(completion.undo?.itemIDs.count == 2, "source and generated occurrence share one undo receipt")
+        let duplicate = try other.performTodoAction(.setTodoCompleted(task.id, true), at: start.addingTimeInterval(31))
+        expect(duplicate.state.todos.count == 2 && duplicate.undo == nil, "repeated completion cannot create another occurrence")
+        let undone = try store.undoTodo(completion.undo!, at: start.addingTimeInterval(32))
+        expect(undone.state.todos.count == 1 && !undone.state.todos[0].isCompleted && undone.state.todos[0].nextOccurrenceID == nil,
+               "undo removes generated occurrence and restores source together")
+        expect(undone.state.logs == completion.state.logs && undone.state.status == .done && undone.state.sessionID == running.sessionID,
+               "repeat undo never restarts focus or removes real work")
+        let redone = try store.undoTodo(undone.undo!, at: start.addingTimeInterval(7 * 86_400))
+        expect(redone.state.todos.first { $0.id == next.id } == next, "redo retains original generated date and IDs, never recomputes next week")
+        var childEdit = next; childEdit.notes = "保护下一项的用户修改"
+        try store.performTodoAction(.replaceTodo(expected: next, replacement: childEdit), at: start)
+        expectThrows("an edited child alone blocks undoing generation") { _ = try store.undoTodo(redone.undo!, at: start) }
+        expect(try store.snapshot(at: start).todos.first { $0.id == source.id } == source,
+               "failed child-conflict undo does not partially reopen source")
+        try store.performTodoAction(.replaceTodo(expected: childEdit, replacement: next), at: start)
+        try store.performTodoAction(.setTodoCompleted(task.id, false), at: start.addingTimeInterval(7 * 86_400))
+        let recompleted = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start.addingTimeInterval(8 * 86_400))
+        expect(recompleted.state.todos.count == 2 && recompleted.state.todos.first { $0.id == next.id } == next,
+               "explicit reopen and recomplete leave the existing next occurrence untouched")
+        var editedNext = next; editedNext.notes = "用户编辑了下一项"
+        try store.performTodoAction(.replaceTodo(expected: next, replacement: editedNext), at: start)
+        expectThrows("undo generation cannot remove an edited next occurrence") { _ = try store.undoTodo(completion.undo!, at: start) }
+        expect(try store.snapshot(at: start).todos.first { $0.id == next.id }?.notes == editedNext.notes, "failed recurrence undo preserves next-occurrence edits")
+        // Old archives can replace the source generation marker. Stable child
+        // identity deduplicates without overwriting an already edited child.
+        try store.mergeTodos([task], collections: [], at: start)
+        let importedRecompletion = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start)
+        expect(importedRecompletion.state.todos.count == 2 && importedRecompletion.state.todos.first { $0.id == next.id }?.notes == editedNext.notes,
+               "restoring an old source archive cannot duplicate or overwrite its next occurrence")
+        let nextCompleted = try store.performTodoAction(.setTodoCompleted(next.id, true), at: next.plannedDate!.addingTimeInterval(12 * 3600))
+        expect(nextCompleted.state.todos.count == 3 && nextCompleted.state.todos.contains { $0.id == next.generatedNextOccurrenceID },
+               "each completed occurrence can generate one following occurrence")
+        try store.performTodoActions([.trashTodo(next.id), .purgeTodos([next.id])], at: start)
+        try store.performTodoAction(.setTodoCompleted(task.id, false), at: start)
+        expect(try store.performTodoAction(.setTodoCompleted(task.id, true), at: start).state.todos.count == 2,
+               "recompleting source never recreates an explicitly purged next occurrence while marker remains")
+        let compatibilityTask = FocusTodo(title: "兼容重复", repeatRule: rule)
+        try store.performTodoAction(.upsertTodo(compatibilityTask), at: start)
+        let compatibility = try store.completeTodo(compatibilityTask.id, at: start)
+        let compatibilityUndone = try store.update(.undoTodoCompletion(compatibility.undo!), at: start)
+        expect(compatibilityUndone.todos.contains { $0.id == compatibilityTask.id && !$0.isCompleted }
+               && !compatibilityUndone.todos.contains { $0.id == compatibilityTask.generatedNextOccurrenceID }, "legacy completion undo also reverses occurrence generation")
+    }
+
+    static func testRepeatCalendar() throws {
+        var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0, calendar: Calendar) -> Date {
+            calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+        }
+        let january = date(2026, 1, 31, calendar: utc)
+        let monthly = TodoRepeatRule(frequency: .monthly, anchorDate: january, timeZoneIdentifier: "UTC")
+        let february = monthly.nextDate(after: january, completedAt: january)!
+        expect(february == date(2026, 2, 28, calendar: utc), "monthly January 31 clamps to February's last day")
+        expect(monthly.nextDate(after: february, completedAt: february) == date(2026, 3, 31, calendar: utc), "monthly anchor returns to March 31 rather than drifting to 28")
+        expect(monthly.nextDate(after: january, completedAt: date(2026, 1, 1, calendar: utc)) == february,
+               "early completion advances after the actual scheduled occurrence")
+        expect(monthly.nextDate(after: january, completedAt: date(2026, 10, 8, calendar: utc)) == date(2026, 10, 31, calendar: utc),
+               "long overdue monthly task skips missed months without backfilling")
+        let leapAnchor = date(2028, 1, 31, calendar: utc)
+        let leap = TodoRepeatRule(frequency: .monthly, anchorDate: leapAnchor, timeZoneIdentifier: "UTC")
+        expect(leap.nextDate(after: leapAnchor, completedAt: leapAnchor) == date(2028, 2, 29, calendar: utc), "leap-year month end preserved")
+        let monday = date(2026, 1, 5, calendar: utc)
+        let weekly = TodoRepeatRule(frequency: .weekly, anchorDate: monday, timeZoneIdentifier: "UTC")
+        expect(weekly.nextDate(after: monday, completedAt: monday) == date(2026, 1, 12, calendar: utc), "weekly advances one anchored weekday")
+        expect(weekly.nextDate(after: monday, completedAt: date(2026, 1, 21, calendar: utc)) == date(2026, 1, 26, calendar: utc), "overdue weekly picks next anchored weekday")
+        var pacific = Calendar(identifier: .gregorian); pacific.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let march7 = date(2026, 3, 7, calendar: pacific)
+        let daily = TodoRepeatRule(frequency: .daily, anchorDate: march7, timeZoneIdentifier: pacific.timeZone.identifier)
+        let march8 = daily.nextDate(after: march7, completedAt: march7)!
+        let march9 = daily.nextDate(after: march8, completedAt: march8)!
+        expect(march9.timeIntervalSince(march8) == 23 * 3600 && pacific.component(.hour, from: march9) == 0,
+               "daily recurrence crosses spring DST by calendar day")
+        let november1 = date(2026, 11, 1, calendar: pacific)
+        let november2 = daily.nextDate(after: november1, completedAt: november1)!
+        expect(november2.timeIntervalSince(november1) == 25 * 3600, "daily recurrence crosses fall DST by calendar day")
+        let missingClock = date(2026, 3, 7, 2, 30, calendar: pacific)
+        let timed = FocusTodo(title: "跨 DST", plannedDate: march7, dueDate: missingClock, hasDueTime: true,
+                              reminderDate: missingClock, repeatRule: daily, repeatScheduledDate: march7)
+        let shifted = timed.nextOccurrence(completedAt: date(2026, 3, 7, 12, calendar: pacific))!
+        expect(pacific.component(.hour, from: shifted.dueDate!) == 3 && pacific.component(.minute, from: shifted.dueDate!) == 30,
+               "missing spring local time keeps minutes at the next valid hour")
+        expect(shifted.reminderDate == shifted.dueDate, "deadline and reminder shift consistently across spring DST")
+        let october31 = date(2026, 10, 31, calendar: pacific)
+        let repeatedClock = date(2026, 10, 31, 1, 30, calendar: pacific)
+        let autumn = FocusTodo(title: "秋季 DST", plannedDate: october31, dueDate: repeatedClock, hasDueTime: true,
+                               reminderDate: repeatedClock, repeatRule: daily, repeatScheduledDate: october31)
+        let repeated = autumn.nextOccurrence(completedAt: october31)!
+        expect(pacific.timeZone.secondsFromGMT(for: repeated.reminderDate!) == -7 * 3600,
+               "fall DST reminder uses first matching local time once")
+        let offset = FocusTodo(title: "月末偏移", plannedDate: january, dueDate: date(2026, 2, 2, calendar: utc),
+                              repeatRule: monthly, repeatScheduledDate: january).nextOccurrence(completedAt: january)!
+        expect(offset.dueDate == date(2026, 3, 2, calendar: utc) && !offset.hasDueTime, "date-only deadline retains its calendar-day offset")
+        expect(daily.nextDate(after: .distantFuture, completedAt: .distantFuture) == nil, "unrepresentable future occurrence fails safely")
+    }
+
+    static func testRepeatCapacity(at start: Date) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("moro-repeat-capacity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("focus-state.json")
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .millisecondsSince1970
+        let task = FocusTodo(title: "重复容量", repeatRule: TodoRepeatRule(frequency: .daily, anchorDate: start, timeZoneIdentifier: "UTC"))
+        var full = FocusState(); full.todoList = FocusTodoList()
+        full.todoList?.items = [task] + (1..<FocusTodo.maximumStoredCount).map { FocusTodo(title: "历史 \($0)", isCompleted: true) }
+        full = full.applying(.selectTarget(.todo(task.id)), at: start).applying(.start, at: start)
+        try full.validate()
+        let before = try encoder.encode(full); try before.write(to: file)
+        let store = FocusStore(directory: directory)
+        expectThrows("repeat completion reports total capacity failure") { _ = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start.addingTimeInterval(10)) }
+        expect(try Data(contentsOf: file) == before, "failed occurrence creation atomically preserves source, timer and logs")
+        expect(full.applying(.setTodoCompleted(task.id, true), at: start.addingTimeInterval(10)) == full, "pure transition also rejects capacity before ending focus")
+        var activeFull = FocusState(); activeFull.todoList = FocusTodoList()
+        activeFull.todoList?.items = [task] + (1..<FocusTodo.maximumCount).map { FocusTodo(title: "待办 \($0)") }
+        try encoder.encode(activeFull).write(to: file)
+        let replaced = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start)
+        expect(replaced.state.todos.filter(\.isPending).count == FocusTodo.maximumCount && replaced.state.todos.count == FocusTodo.maximumCount + 1,
+               "recurrence replaces one active slot at the active-task limit")
+        var impossible = task
+        impossible.repeatRule?.anchorDate = .distantFuture
+        impossible.repeatScheduledDate = .distantFuture
+        var base = FocusState(); base.todoList = FocusTodoList(); base.todoList?.items = [impossible]
+        try encoder.encode(base).write(to: file)
+        expectThrows("invalid next date is reported without completing source") { _ = try store.performTodoAction(.setTodoCompleted(task.id, true), at: start) }
+        expect(try store.snapshot(at: start).todos[0].isPending, "unrepresentable recurrence leaves task pending")
+    }
+
+    static func testVersion4Migration(at start: Date) throws {
+        let collection = TodoCollection(title: "迁移清单")
+        let first = FocusTodo(title: "保持元数据", notes: "备注", plannedDate: start, dueDate: start.addingTimeInterval(3600),
+                              hasDueTime: true, reminderDate: start.addingTimeInterval(1800), listID: collection.id,
+                              createdAt: start.addingTimeInterval(-86_400), sortOrder: 42)
+        let second = FocusTodo(title: "未知完成时间", isCompleted: true, deletedAt: start, sortOrder: 7)
+        for status in [FocusStatus.idle, .running, .paused, .done] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("moro-v4-v5-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var legacy = FocusState(); legacy.todoList = FocusTodoList()
+            legacy.todoList?.items = [first, second]; legacy.todoList?.collections = [collection]
+            legacy = legacy.applying(.selectTarget(.todo(first.id)), at: start).applying(.selectDuration(420), at: start)
+            if status != .idle { legacy = legacy.applying(.start, at: start) }
+            if status == .paused { legacy = legacy.applying(.pause, at: start.addingTimeInterval(10)) }
+            if status == .done { legacy = legacy.applying(.finish, at: start.addingTimeInterval(10)) }
+            legacy.version = 4
+            try legacy.validate()
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .millisecondsSince1970
+            let bytes = try encoder.encode(legacy)
+            let file = directory.appendingPathComponent("focus-state.json"); try bytes.write(to: file)
+            var expected = legacy; expected.version = 5
+            let migrated = try FocusStore(directory: directory).snapshot(at: start.addingTimeInterval(20))
+            expect(migrated == expected, "v4 migration changes only schema, preserving manual order, durations, metadata and logs")
+            expect(migrated.todos.allSatisfy { $0.steps.isEmpty && $0.repeatRule == nil && $0.nextOccurrenceID == nil }, "legacy tasks gain empty step/repeat defaults without invented values")
+            let backups = try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("Backups"), includingPropertiesForKeys: nil)
+            expect(try backups.count == 1 && backups[0].lastPathComponent.hasPrefix("pre-v5-v4-") && Data(contentsOf: backups[0]) == bytes,
+                   "v4 upgrade keeps byte-exact versioned backup")
+        }
+        var wrongVersion = FocusState().applying(.upsertTodo(FocusTodo(title: "新步骤", steps: [TodoStep(title: "步骤")])), at: start)
+        wrongVersion.version = 4
+        expectThrows("v5 fields cannot masquerade as v4 and be dropped by old apps") { try wrongVersion.validate() }
+    }
+
+    static func testFocusSummaries(at start: Date) throws {
+        let first = UUID(), second = UUID()
+        func log(_ ids: [UUID]?, seconds: TimeInterval, completed: Bool, offset: TimeInterval) -> FocusLog {
+            FocusLog(id: UUID(), task: "记录", startedAt: start, endedAt: start.addingTimeInterval(offset), seconds: seconds,
+                     completed: completed, todoIDs: ids)
+        }
+        let one = log([first], seconds: 60, completed: true, offset: 60)
+        let two = log([first], seconds: 30, completed: false, offset: 120)
+        var state = FocusState()
+        state.logs = [one, two, log([second], seconds: 45, completed: true, offset: 45),
+                      log([first, second], seconds: 1000, completed: true, offset: 1000),
+                      log(nil, seconds: 500, completed: true, offset: 500), log([], seconds: 100, completed: true, offset: 100)]
+        let summaries = state.todoFocusSummaries
+        expect(summaries[first]?.totalSeconds == 90 && summaries[first]?.sessionCount == 2
+               && summaries[first]?.completedSessionCount == 1 && summaries[first]?.lastFocusedAt == start.addingTimeInterval(120),
+               "single-task summary counts saved work once with separate natural completions")
+        expect(summaries[second]?.totalSeconds == 45 && summaries.count == 2, "legacy multi-task and free sessions are never duplicated or divided into task totals")
+        state.logs.append(one)
+        expect(state.todoFocusSummaries[first]?.totalSeconds == 90, "defensive summary never counts a duplicated log ID twice")
+    }
+
+    static func testConcurrentRepeatCompletion(at start: Date) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("moro-repeat-race-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FocusStore(directory: directory)
+        let task = FocusTodo(title: "并发完成", repeatRule: TodoRepeatRule(frequency: .daily, anchorDate: start, timeZoneIdentifier: "UTC"))
+        try store.performTodoAction(.upsertTodo(task), at: start)
+        try store.performActions([.selectTarget(.todo(task.id)), .start], at: start)
+        var workers: [Process] = []
+        for _ in 0..<4 {
+            let worker = Process()
+            worker.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            worker.arguments = ["--complete-worker", directory.path, task.id.uuidString, String(start.addingTimeInterval(30).timeIntervalSince1970)]
+            try worker.run(); workers.append(worker)
+        }
+        for worker in workers { worker.waitUntilExit(); expect(worker.terminationStatus == 0, "recurrence worker finished") }
+        let result = try store.snapshot(at: start.addingTimeInterval(30))
+        expect(result.todos.count == 2 && result.todos.filter(\.isPending).count == 1
+               && result.todos.first { $0.id == task.id }?.nextOccurrenceID == task.generatedNextOccurrenceID,
+               "twenty concurrent completion attempts create exactly one occurrence")
+        expect(result.logs.count == 1 && result.logs[0].seconds == 30 && result.logs[0].todoIDs == [task.id],
+               "concurrent repeating completion stops focus exactly once")
     }
 
     static func expectThrows(_ message: String, _ work: () throws -> Void) {

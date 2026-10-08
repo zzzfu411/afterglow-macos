@@ -82,6 +82,11 @@ final class FocusModel: ObservableObject {
     @Published var pendingFocusID: UUID?
     @Published var pendingPurgeIDs: [UUID] = []
     @Published var pendingImport: TodoImportRequest?
+    @Published private(set) var focusQueue: [UUID] = []
+    @Published private(set) var queueIndex = 0
+    private var pendingQueue: [UUID]?
+    private var pendingFocusMinutes: Int?
+    private var focusSummaries: [UUID: TodoFocusSummary] = [:]
     @Published var isEditingDuration = false
     @Published private(set) var isBusy = false
     @Published private(set) var visibleTodos: [FocusTodo] = []
@@ -111,6 +116,14 @@ final class FocusModel: ObservableObject {
     private var redoStack: [TodoUndoRecord] = []
 
     var shared: Bool { store.isShared }
+    func summary(for id: UUID) -> TodoFocusSummary? { focusSummaries[id] }
+    var queueProgress: String? { focusQueue.isEmpty ? nil : "\(queueIndex + 1)/\(focusQueue.count)" }
+    private var nextQueueIndex: Int? {
+        guard queueIndex + 1 < focusQueue.count else { return nil }
+        let pending = Set(state.todos.filter(\.isPending).map(\.id))
+        return ((queueIndex + 1)..<focusQueue.count).first { pending.contains(focusQueue[$0]) }
+    }
+    var hasNextQueueItem: Bool { nextQueueIndex != nil }
     var hasMoreTodos: Bool { visibleTodoCount > visibleTodos.count }
     var sectionTitle: String {
         if case .collection(let id) = section { return collections.first { $0.id == id }?.title ?? "清单" }
@@ -248,8 +261,7 @@ final class FocusModel: ObservableObject {
         guard let item = state.todos.first(where: { $0.id == id }), !item.isDeleted else { return }
         if todoDraft?.id == id { return }
         if let draft = todoDraft, draft.id != id {
-            let old = state.todos.first { $0.id == draft.id }
-            if !draft.sameEditableFields(as: TodoDraft(item: old)) { notice = "先保存或取消当前编辑"; return }
+            if draft.hasUnsavedChanges { notice = "先保存或取消当前编辑"; return }
         }
         todoDraft = TodoDraft(item: item); selectedTodoID = id
     }
@@ -288,7 +300,7 @@ final class FocusModel: ObservableObject {
     func trashTodo(_ id: UUID) { trashTodos([id]) }
     func trashTodos(_ ids: [UUID]) {
         NSApp.keyWindow?.makeFirstResponder(nil)
-        if let draft = todoDraft, ids.contains(draft.id), !draft.sameEditableFields(as: TodoDraft(item: state.todos.first { $0.id == draft.id })) {
+        if let draft = todoDraft, ids.contains(draft.id), draft.hasUnsavedChanges {
             notice = "先保存或取消当前编辑，再删除事项"; return
         }
         changeTodos(ids.map { .trashTodo($0) }) { [weak self] in
@@ -336,7 +348,7 @@ final class FocusModel: ObservableObject {
     func confirmPurgeTodos() {
         let ids = pendingPurgeIDs; pendingPurgeIDs = []
         guard !ids.isEmpty else { return }
-        changeTodos([.purgeTodos(ids)]) { [weak self] in self?.notice = "已永久删除，可在退出前撤销" }
+        changeTodos([.purgeTodos(ids)]) { [weak self] in self?.notice = self?.canUndoTodo == true ? "已永久删除，可撤销" : "已永久删除" }
     }
     func restoreTodo(_ id: UUID) { restoreTodos([id]) }
     func restoreTodos(_ ids: [UUID]) { changeTodos(ids.map { .restoreTodo($0) }) }
@@ -394,17 +406,24 @@ final class FocusModel: ObservableObject {
     }
     private func updateUndoAvailability() { canUndoTodo = !undoStack.isEmpty; canRedoTodo = !redoStack.isEmpty }
 
-    func startFocus(_ id: UUID) {
-        guard state.todos.contains(where: { $0.id == id && $0.isPending }), !isBusy else { return }
+    func startFocus(_ id: UUID, minutes: Int? = nil) {
+        guard state.todos.contains(where: { $0.id == id && $0.isPending }), !isBusy,
+              minutes.map({ (1...180).contains($0) }) ?? true else { return }
         if state.isActive {
-            if state.sessionTodoIDs == [id], state.mode == .focus { showFocus = true; return }
-            pendingFocusID = id; return
+            if state.sessionTodoIDs == [id], state.mode == .focus, minutes == nil { showFocus = true; return }
+            pendingQueue = nil; pendingFocusMinutes = minutes; pendingFocusID = id; return
         }
-        beginFocus(target: .todo(id))
+        beginFocus(target: .todo(id), minutes: minutes)
     }
     func confirmSwitchFocus() {
         guard let id = pendingFocusID else { return }
-        pendingFocusID = nil; beginFocus(target: .todo(id), finishCurrent: true)
+        guard state.todos.contains(where: { $0.id == id && $0.isPending }) else {
+            pendingFocusID = nil; pendingQueue = nil; pendingFocusMinutes = nil; notice = "该事项已完成或删除，当前专注保持不变"; return
+        }
+        let queue = pendingQueue
+        let minutes = pendingFocusMinutes
+        pendingFocusID = nil; pendingQueue = nil; pendingFocusMinutes = nil
+        beginFocus(target: .todo(id), finishCurrent: true, queue: queue, minutes: minutes, allowQueued: true)
     }
     func setFocusDuration(_ minutes: Int) {
         guard !state.isActive, !isBusy, (1...180).contains(minutes) else { return }
@@ -417,10 +436,31 @@ final class FocusModel: ObservableObject {
         })
     }
     func startFreeFocus() { guard !state.isActive else { showFocus = true; return }; beginFocus(target: .free) }
-    private func beginFocus(target: FocusTarget, finishCurrent: Bool = false) {
+    func startFocusQueue(_ ids: [UUID]) {
         guard !isBusy else { return }
-        let actions: [FocusAction] = (finishCurrent ? [.finish] : []) + [.selectMode(.focus), .selectTarget(target), .start]
+        let pending = Set(state.todos.filter(\.isPending).map(\.id))
+        var seen = Set<UUID>()
+        let queue = ids.filter { pending.contains($0) && seen.insert($0).inserted }
+        guard let first = queue.first else { notice = "没有可专注的事项"; return }
+        if state.isActive {
+            if state.mode == .focus && state.sessionTodoIDs == [first] { focusQueue = queue; queueIndex = 0 }
+            else { pendingQueue = queue; pendingFocusMinutes = nil; pendingFocusID = first }
+        } else { beginFocus(target: .todo(first), queue: queue) }
+    }
+    func advanceFocusQueue() {
+        guard !isBusy, let index = nextQueueIndex else { return }
+        beginFocus(target: .todo(focusQueue[index]), finishCurrent: state.isActive, queue: focusQueue, index: index)
+    }
+    func clearFocusQueue() { focusQueue = []; queueIndex = 0 }
+    private func beginFocus(target: FocusTarget, finishCurrent: Bool = false, queue: [UUID]? = nil, index: Int = 0, minutes: Int? = nil, allowQueued: Bool = false) {
+        guard allowQueued || !isBusy else { return }
+        let durationActions: [FocusAction] = minutes.map {
+            [.selectTarget(.free), .selectDuration(TimeInterval($0 * 60))]
+        } ?? []
+        let actions: [FocusAction] = (finishCurrent ? [.finish] : []) + [.selectMode(.focus)]
+            + durationActions + [.selectTarget(target)] + (target == .free ? [.setTask("")] : []) + [.start]
         enqueue(work: { try await $0.actions(actions) }, success: { [weak self] result in
+            self?.focusQueue = queue ?? []; self?.queueIndex = index
             self?.reminders?.reconcile(result.state, requestPermission: true)
         })
     }
@@ -434,20 +474,20 @@ final class FocusModel: ObservableObject {
         else { startFreeFocus() }
     }
     func showCurrentTodo() {
-        guard let id = state.sessionTodoIDs?.first, let item = state.todos.first(where: { $0.id == id }) else { return }
-        searchText = ""; section = item.isDeleted ? .trash : (item.isCompleted ? .completed : .all)
-        pageSize = FocusTodo.maximumStoredCount; rebuildTodos(); selectedTodoID = id; showFocus = false
-        if !item.isDeleted { editTodo(id) }
+        if let id = state.sessionTodoIDs?.first { openTodo(id) }
     }
     func openTodo(_ id: UUID) {
         guard let item = state.todos.first(where: { $0.id == id }) else { return }
+        if let draft = todoDraft, draft.id != id, draft.hasUnsavedChanges {
+            notice = "先保存或取消当前编辑"; return
+        }
         searchText = ""; section = item.isDeleted ? .trash : (item.isCompleted ? .completed : .all)
-        pageSize = FocusTodo.maximumStoredCount; rebuildTodos(); selectedTodoID = id; showFocus = false
+        rebuildTodos(revealing: id); selectedTodoID = id; showFocus = false
         if !item.isDeleted { editTodo(id) }
     }
     func loadMoreTodos() { pageSize += 100; rebuildTodos() }
     func count(in section: TodoSection) -> Int { counts[section] ?? 0 }
-    private func rebuildTodos() {
+    private func rebuildTodos(revealing id: UUID? = nil) {
         let now = Date(), items = state.todos
         let sections: [TodoSection] = [.inbox, .today, .upcoming, .all, .completed, .trash] + collections.map { .collection($0.id) }
         counts = Dictionary(uniqueKeysWithValues: sections.map { section in (section, items.filter { section.contains($0, at: now) }.count) })
@@ -473,6 +513,7 @@ final class FocusModel: ObservableObject {
             let bIndex = positions[b.id] ?? 0
             return aIndex < bIndex
         }
+        if let id, let index = matching.firstIndex(where: { $0.id == id }) { pageSize = ((index / 100) + 1) * 100 }
         visibleTodoCount = matching.count; visibleTodos = Array(matching.prefix(pageSize))
     }
     private func scheduleDayBoundary() {
@@ -497,6 +538,14 @@ final class FocusModel: ObservableObject {
         let old = state, changed = old != updated
         let todosChanged = old.todoList?.items != updated.todoList?.items || old.todoList?.collections != updated.todoList?.collections
         if changed { state = updated }
+        if let draft = todoDraft, !draft.hasUnsavedChanges,
+           let latest = updated.todos.first(where: { $0.id == draft.id && !$0.isDeleted }) {
+            todoDraft = TodoDraft(item: latest)
+        }
+        if old.logs != updated.logs || force { focusSummaries = updated.todoFocusSummaries }
+        if state.status == .idle { clearFocusQueue() }
+        else if state.mode == .focus, state.isActive, !focusQueue.isEmpty,
+                state.sessionTodoIDs != [focusQueue[queueIndex]] { clearFocusQueue() }
         if todosChanged || force {
             collections = state.todoList?.collections ?? []
             if case .collection(let id) = section, !collections.contains(where: { $0.id == id }) { section = .inbox }
@@ -513,7 +562,7 @@ final class FocusModel: ObservableObject {
             }
         }
         if changed || force { reminders?.reconcile(state) }
-        if shared && (old.status != updated.status || old.deadline != updated.deadline || old.duration != updated.duration || old.currentTask != updated.currentTask || old.remaining != updated.remaining) {
+        if shared && TodoWidgetSnapshot(state: old) != TodoWidgetSnapshot(state: updated) {
             WidgetCenter.shared.reloadAllTimelines()
         }
     }

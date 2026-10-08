@@ -1,4 +1,4 @@
-# 构建与安装
+# 构建与安装 · 0.7.0
 
 ## 主应用
 
@@ -9,76 +9,110 @@
 open .build/local/Moro.app
 ```
 
-脚本按当前 Mac 的架构构建，使用 ad-hoc 签名，输出在 `.build/local/`。这一构建只含主应用和菜单栏，不安装 WidgetKit 扩展，也不代表公证发行包。
+输出为 `.build/local/Moro.app`，按当前 Mac 的架构构建，使用 ad-hoc 签名。脚本不会安装到“应用程序”；如需常驻使用，可退出旧版后将产物拖入“应用程序”。该构建包含主窗口、菜单栏和独立快速录入，不包含 WidgetKit 扩展，也不是公证发行包。
+
+当前界面为中文。全局快速录入快捷键默认关闭，需要在设置中自行选择；提醒需要单独允许通知。
 
 ## 桌面小组件
 
-这部分需要[完整 Xcode](https://developer.apple.com/xcode/)和有效的 Apple 开发签名配置。推荐 Xcode 26+，以编译 Liquid Glass 分支；运行目标仍为 macOS 14+。
+0.7.0 组件源码展示今天的少量事项与当前专注：小号最多展示 2 项，中号最多 3 项；点事项打开主应用，计时控制通过 App Intents 执行。扩展读取专用快照，不读取完整备注、步骤和日志。
 
-1. 在 Xcode 打开 `Afterglow.xcodeproj`。
-2. 给 **Afterglow** 和 **AfterglowWidgets** 两个 target 选择同一个真实 Team。
-3. 核对两边的 App Group entitlement 与 Info.plist。默认标识为 `$(DEVELOPMENT_TEAM).app.afterglow.shared`。
+**验证状态：本版小组件源码已通过编译和链接；完整 Xcode CI 尚待本次代码推送后运行。签名安装、系统图库和桌面交互仍待实机验证。** 历史版本 CI 通过不代表 0.7.0 已完成这部分验证。参见 [QA.md](../QA.md) 与 [CI 记录](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml)。
+
+构建扩展需要完整 Xcode，以及能授权 App Group 的有效 Apple 签名配置。仅安装 Command Line Tools 或对主应用进行 ad-hoc 签名，不能完成这一步。
+
+1. 用 Xcode 打开 `Afterglow.xcodeproj`。
+2. 为 **Afterglow** 和 **AfterglowWidgets** 两个 target 选择同一个真实 Team。
+3. 核对两个 target 的 App Group entitlement 与 Info.plist；默认标识为 `$(DEVELOPMENT_TEAM).app.afterglow.shared`。
 4. 选择 **Afterglow** scheme、**My Mac**，构建并运行宿主一次。
-5. 右键桌面 → **编辑小组件** → 搜索 **Moro**，添加小号或中号。
+5. 签名与共享容器正常后，右键桌面 → **编辑小组件** → 搜索 **Moro**。
 
-也可使用终端：
+终端构建：
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   ./scripts/build-xcode.sh YOUR_TEAM_ID
 ```
 
-将 `YOUR_TEAM_ID` 替换为真实的 10 位 Team ID。此命令不改变全局 `xcode-select`，不自动登录、申请证书或接受协议。
-
-也可以把 Team 写入被 Git 忽略的 `Config/Local.xcconfig`：
+将 `YOUR_TEAM_ID` 换成真实的 10 位 Team ID。命令不会改变全局 `xcode-select`，也不会代为登录、申请证书或接受协议。也可将 Team 写入被 Git 忽略的 `Config/Local.xcconfig`：
 
 ```xcconfig
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
 ```
 
-App Group 使用 macOS 专用的 Team 前缀形式。ad-hoc 签名不能替代共享容器授权。组件访问不到共享容器时会显示“打开 Moro”，而不是创建一个独立计时器。
+共享容器不可用或快照失效时，组件提示打开 Moro，不创建第二套独立数据。组件最终的背景和着色由 WidgetKit 与系统设置决定；源码编译成功不能验证桌面材质或通知的真实呈现。
 
-**状态：主应用与组件已通过完整 Xcode 构建及 App Intents 元数据生成；签名后的桌面安装与交互尚未验证。** 完整检查记录见 [QA.md](../QA.md)。
+## 数据备份与升级
 
-## 数据与外观
+Moro 保留原有 bundle ID、App Group、URL scheme 和数据路径。工程与 scheme 仍名为 `Afterglow`，产物为 `Moro.app` 与 `MoroWidgets.appex`，不需要因为改名重建待办。
 
-Moro 沿用原应用的 bundle ID、App Group、URL scheme 与数据路径，因此改名后待办、记录和偏好继续可用。Xcode 工程与 scheme 仍名为 `Afterglow`，构建产物为 `Moro.app` 和 `MoroWidgets.appex`。
-
-本地预览版的数据路径：
+本地主应用的数据目录：
 
 ```text
-~/Library/Application Support/Afterglow/Standalone/focus-state.json
+~/Library/Application Support/Afterglow/Standalone/
+  focus-state.json       事项、清单、计时与保留的日志
+  widget-snapshot.json   可重新生成的小组件摘要
+  Backups/               升级前原始文件
 ```
 
-签名版应用与组件在 App Group 中共享数据，与本地预览版分开。外观偏好保存在应用的本机 UserDefaults。此项目不会读取旧网页版本的数据。
+签名版应用与扩展使用 App Group 目录，与本地预览版分开；不会自动合并两份数据。外观、导航与快捷键偏好在本机 UserDefaults 中，应用不读取旧网页版本的数据。
 
-计时使用保存的截止日期。每次写入都会持有文件锁，读取最新状态后原子保存；过期结算使用原截止时间，历史记录以 UUID 去重。组件数字由系统日期视图更新，业务代码不依赖每秒后台执行。
+### 格式与恢复
 
-主窗口使用 `NSVisualEffectView` 对窗口后方内容进行模糊。以 Xcode 26+ 构建时，macOS 26+ 的按钮使用 Liquid Glass；较早工具链或系统使用 Material。“减少透明度”开启时使用实色。桌面组件的最终外观由 WidgetKit 渲染模式决定。
+当前状态格式为 **v5**。第一次读取旧格式时，存储层先保存并校验原始文件，备份命名为 `Backups/pre-v5-v<原版本>-<UUID>.json`，再原子替换升级后的状态。失败会报告错误并保留原文件，不用空清单覆盖损坏数据。旧版应用会拒绝新格式。
 
-## 开发命令
+升级前也可自行复制整个数据目录。恢复状态文件时先退出主应用；使用签名版时，先从桌面移除访问同一容器的小组件。保留当前文件副本，再用匹配应用版本的备份替换 `focus-state.json`。重启主应用后会重新生成快照。不要删除整个数据目录来处理启动错误。
+
+“文件”菜单或设置中的待办导出生成 **归档 v2**，兼容读取 v1。归档包含事项、清单、步骤、重复规则及完成/删除状态，**不包含计时、专注日志和 UserDefaults 偏好**。导入前显示新增与覆盖数量，同 ID 合并，不重复创建；导入不会替换当前计时或专注日志。需要保留完整历史时，应备份状态文件，而非只导出待办。
+
+### 容量与统计边界
+
+| 数据 | 当前上限 |
+| --- | --- |
+| 未完成且未删除的事项 | 1,000 项 |
+| 所有保留事项，含已完成与最近删除 | 10,000 项 |
+| 自定义清单 | 100 个 |
+| 每项一级步骤 | 100 个 |
+| 状态文件 / 待办归档 | 16 MB |
+| 专注日志 | 最近 1,000 条 |
+| 待办撤销记录 | 会话内最多 20 次且受 4 MB 预算限制 |
+
+文字内容较多时，文件大小限制可能先于项数限制生效。已完成和最近删除不消耗未完成额度；达到总容量后，可先导出归档，再明确选择永久删除不再保留的内容。应用不会为腾出待办容量自动清空历史事项。
+
+单项专注统计依据当前保留的日志，不是终身累计。没有单项 ID 的旧日志保留在历史中，不猜测归属。
+
+## 外观与资源
+
+主窗口正文采用系统实色背景，侧栏使用原生 vibrancy，随窗口激活与辅助功能设置变化。此版本不以整窗毛玻璃作为阅读表面。“自动”外观跟随系统；“减少透明度”使用实色回退。
+
+磁盘读写在串行工作队列中执行，文件锁协调进程，原子写入保证事务完整。列表按 100 项分批展示；日期边界、激活、唤醒和数据变更触发更新，无持续轮询。计时保存截止时间，暂停不累计，过期结算按会话 ID 去重。
+
+提醒独立于截止日期，优先排入最近 48 项待办提醒并为计时提醒留出空间；未排入数量与失败状态显示在设置中。进入应用时重新协调，退出后不会为超额事项继续补排。
+
+测量方法、资源数据与剩余验证范围见 [PERFORMANCE.md](PERFORMANCE.md) 和 [QA.md](../QA.md)。模型基准测试不能替代完整应用、WindowServer 或 WidgetKit 的测量。
+
+## 开发检查
 
 ```sh
-./scripts/test.sh
-./scripts/test-window.sh
-./scripts/check-native.sh
-./scripts/render-preview.sh
-./scripts/render-icon.sh
+./scripts/test.sh                  # 状态、步骤、重复、迁移、跨进程事务
+./scripts/test-runtime.sh          # 异步模型、草稿、队列、无轮询与压力检查
+./scripts/test-todo-reminders.sh   # 待办通知授权、重排与失败恢复
+./scripts/test-todo-transfer.sh    # 归档、合并与冲突
+./scripts/test-shortcuts.sh        # 快速录入、快捷键与保存竞态
+./scripts/test-widget-snapshot.sh  # 小组件摘要和时间边界
+./scripts/test-window.sh           # 原生外观、输入与布局
+./scripts/check-native.sh          # SwiftUI / WidgetKit 编译
+./scripts/build-local.sh           # 主应用构建
+```
+
+测试使用临时数据、隔离偏好或替身服务；相关测试不会请求真实通知权限或修改用户待办。原生界面测试需要能访问 macOS 窗口服务的登录会话。自动化检查的准确范围以 [QA.md](../QA.md) 为准。
+
+工程由 `scripts/generate-project.py` 生成。修改源文件清单或工程配置后，更新生成器再运行：
+
+```sh
 python3 scripts/generate-project.py
 ```
 
-`render-preview.sh` 导出共用视图的字体、布局和静态材质配色示意。离屏渲染无法取样真实桌面，不用于验证 WindowServer 或 WidgetKit 的背景模糊。
+`render-preview.sh` 仅输出共享视图的静态示意，不能作为 0.7.0 主界面截图，也不能验证桌面背景模糊。`render-icon.sh` 用于现有应用图标资产。
 
-工程由 `generate-project.py` 生成；修改源文件列表或工程配置时，更新生成器后重新生成，避免下一次生成覆盖手动调整。
-
-`test-window.sh` 在独立进程内装载 AppKit / SwiftUI 和未显示窗口，验证外观继承与布局边界。需要可访问 macOS 窗口服务的登录会话；不会改变系统外观、应用的真实偏好或计时数据。
-
-## 发布前
-
-- 验证完整 Xcode 构建和 App Intents 元数据。
-- 验证签名版宿主启动后，组件进入系统图库。
-- 验证关闭主窗口、退出宿主后，组件读写与倒计时仍正确。
-- 检查单色、着色、深浅色和不同壁纸的可读性。
-- 如分发安装包，完成 Developer ID 签名与公证。
-
-参考：[创建 Widget Extension](https://developer.apple.com/documentation/widgetkit/creating-a-widget-extension) · [交互式组件](https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities) · [共享容器授权](https://developer.apple.com/documentation/xcode/accessing-app-group-containers) · [Liquid Glass 与着色模式](https://developer.apple.com/documentation/widgetkit/optimizing-your-widget-for-accented-rendering-mode-and-liquid-glass)
+正式分发仍需验证已签名宿主、组件图库与桌面操作，并完成适用的公证流程。打包工具与命令见 [RELEASING.md](RELEASING.md)。
