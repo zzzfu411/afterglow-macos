@@ -26,11 +26,16 @@ private struct AppearanceProbe: NSViewRepresentable {
 private struct AppearanceHost: View {
     @ObservedObject var controller: FocusAppearanceController
     let readback: AppearanceReadback
+    var sidebar = false
+    var reduceTransparency = false
 
     var body: some View {
         AppearanceProbe(readback: readback)
-            .frame(width: 320, height: 360)
-            .background(NativeWindowSurface())
+            .frame(width: 360, height: 400)
+            .background {
+                if sidebar { NativeSidebarSurface(forceOpaque: reduceTransparency) }
+                else { NativeWindowSurface() }
+            }
             .environment(\.colorScheme, controller.colorScheme)
     }
 }
@@ -72,23 +77,35 @@ struct WindowBehaviorTests {
         let controller = FocusAppearanceController(selection: .system, application: application, defaults: defaults)
         let readback = AppearanceReadback()
         let host = NSHostingView(rootView: AppearanceHost(controller: controller, readback: readback))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 360),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 400),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.close() }
+        let sidebarReadback = AppearanceReadback()
+        let sidebarHost = NSHostingView(rootView: AppearanceHost(controller: controller, readback: sidebarReadback, sidebar: true))
+        let sidebarWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 196, height: 400),
+                                     styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        sidebarWindow.isReleasedWhenClosed = false
+        sidebarWindow.contentView = sidebarHost
+        defer { sidebarWindow.close() }
 
         for selection in [FocusAppearance.dark, .system, .light, .system, .dark, .light, .system] {
             controller.selection = selection
-            settle(host)
+            settle(host); settle(sidebarHost)
             let expected = scheme(application.effectiveAppearance)
             expect(controller.colorScheme == expected, "controller resolves \(selection) from AppKit")
             expect(readback.scheme == expected, "hosted SwiftUI content matches \(selection)")
             expect(scheme(window.effectiveAppearance) == expected, "native window matches \(selection); app=\(application.effectiveAppearance.name), window=\(window.effectiveAppearance.name), windowOverride=\(String(describing: window.appearance?.name)), host=\(host.effectiveAppearance.name)")
             expect(readback.view.map { scheme($0.effectiveAppearance) } == expected, "native content matches \(selection)")
-            guard let material = backdrop(in: host) else { fatalError("Missing real native backdrop") }
-            expect(material.appearance == nil, "material inherits instead of retaining an override")
-            expect(scheme(material.effectiveAppearance) == expected, "material and foreground agree")
+            expect(backdrop(in: host) == nil, "task content remains a stable opaque surface in \(selection)")
+            expect(window.isOpaque, "task surface does not make the native window transparent")
+            guard let material = backdrop(in: sidebarHost) else { fatalError("Missing native sidebar material") }
+            expect(material.material == .sidebar, "vibrancy is restricted to the sidebar material")
+            expect(material.state == .followsWindowActiveState, "sidebar responds to active and inactive windows")
+            expect(material.appearance == nil, "sidebar inherits instead of retaining an override")
+            expect(scheme(material.effectiveAppearance) == expected, "sidebar material and foreground agree")
+            expect(sidebarReadback.scheme == expected, "sidebar text follows \(selection)")
             if selection == .system {
                 expect(application.appearance == nil, "Auto removes explicit app appearance")
             }
@@ -106,31 +123,39 @@ struct WindowBehaviorTests {
         settle(host)
         expect(readback.scheme == scheme(application.effectiveAppearance), "return to inherited appearance reaches content")
 
+        sidebarHost.rootView = AppearanceHost(controller: controller, readback: sidebarReadback,
+                                              sidebar: true, reduceTransparency: true)
+        settle(sidebarHost)
+        expect(backdrop(in: sidebarHost) == nil, "the Reduce Transparency fallback replaces sidebar vibrancy with a solid surface")
+        expect(sidebarReadback.scheme == controller.colorScheme, "solid sidebar keeps the same readable appearance")
+        sidebarHost.rootView = AppearanceHost(controller: controller, readback: sidebarReadback, sidebar: true)
+        settle(sidebarHost)
+        expect(backdrop(in: sidebarHost)?.material == .sidebar, "leaving the solid fallback restores sidebar material")
+
         let minimum = FocusWindowLayout.minimumSize
-        for width: CGFloat in [481, 620, 900] {
+        expect(minimum == CGSize(width: 360, height: 400), "compact task window retains a readable single column")
+        expect(FocusWindowLayout.defaultSize == CGSize(width: 760, height: 540), "default window gives tasks the primary reading area")
+        expect(FocusWindowLayout.sidebarMinimumWidth == 160, "sidebar still supports the requested narrow width")
+        expect(FocusWindowLayout.sidebarCollapseWidth > minimum.width + FocusWindowLayout.sidebarMinimumWidth,
+               "navigation collapses before squeezing the task list below its minimum")
+        for width: CGFloat in [560, 620, 760, 900] {
             let sidebarWidth = FocusWindowLayout.sidebarWidthLimit(windowWidth: width)
             expect(sidebarWidth >= FocusWindowLayout.sidebarMinimumWidth
                    && sidebarWidth <= FocusWindowLayout.sidebarMaximumWidth
                    && width - sidebarWidth - 1 >= minimum.width,
-                   "sidebar resize leaves the full timer visible in a \(width)-point window")
+                   "sidebar resize leaves the full task list visible in a \(width)-point window")
         }
         let splitDetail = CGSize(width: FocusWindowLayout.defaultSize.width - FocusWindowLayout.sidebarIdealWidth - 1,
                                  height: FocusWindowLayout.defaultSize.height)
-        let sizes = [minimum, splitDetail, FocusWindowLayout.defaultSize, CGSize(width: 720, height: 640),
-                     CGSize(width: 320, height: 800), CGSize(width: 900, height: minimum.height)]
-        for size in sizes {
+        expect(splitDetail.width >= minimum.width, "default split leaves enough space for long task titles and inline details")
+        // The optional focus view is bounded; increasing the task window must
+        // not turn the list into a large timer or remove content padding.
+        for size in [minimum, splitDetail, CGSize(width: 900, height: 800)] {
             let layout = FocusWindowLayout(size: size)
-            expect(layout.contentWidth <= size.width - 40, "content keeps horizontal insets at \(size)")
-            expect(layout.contentHeight <= size.height, "detail fits beneath the native title bar at \(size)")
-            expect(layout.timerSize >= 72 && layout.timerSize <= 112, "readout remains within readable scale bounds")
-            expect(layout.contentWidth >= 262, "presets and the editable custom duration fit together")
-            // Picker + readout/status + presets + controls + required gaps.
-            let fixedControlsHeight: CGFloat = 254
-            let requiredHeight = fixedControlsHeight + ceil(layout.timerSize * 1.16)
-            expect(requiredHeight <= layout.contentHeight, "full control stack fits at \(size)")
+            expect(layout.contentWidth <= min(480, size.width - 40), "optional focus view retains bounded content and horizontal insets")
+            expect(layout.contentHeight <= size.height, "optional focus view fits beneath the native title bar")
+            expect(layout.timerSize >= 72 && layout.timerSize <= 112, "optional readout has a bounded font size")
         }
-        expect(FocusWindowLayout(size: CGSize(width: 720, height: 640)).timerSize > FocusWindowLayout(size: minimum).timerSize,
-               "enlarging both dimensions enlarges the timer")
 
         // Static and paused readouts must match the system live timer's format.
         for (duration, expected) in [(60.0, "1:00"), (1500.0, "25:00"), (3600.0, "1:00:00"),

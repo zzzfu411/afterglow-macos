@@ -17,6 +17,11 @@ struct FocusSettings: View {
                 ReminderSettings(reminders: reminders, state: model.state)
                 Divider()
             }
+            if let todoReminders = model.todoReminders {
+                TodoReminderSettings(reminders: todoReminders, todos: model.state.todos)
+                Divider()
+            }
+            DefaultDurationSetting(model: model)
             Label("桌面小组件", systemImage: "rectangle.3.group").font(.headline)
             if model.shared {
                 Text("右键桌面 → 编辑小组件 → Moro")
@@ -28,7 +33,9 @@ struct FocusSettings: View {
                 }
             }
             Divider()
-            LabeledContent("开始 / 暂停", value: "空格")
+            LabeledContent("开始 / 暂停", value: "⌘ Return")
+            LabeledContent("搜索事项", value: "⌘ F")
+            LabeledContent("撤销 / 重做", value: "⌘ Z / ⇧⌘ Z")
             LabeledContent("结束", value: "⌘ .")
             LabeledContent("添加待办", value: "⌘ N")
             LabeledContent("待办边栏", value: "⌘ B")
@@ -73,4 +80,39 @@ private struct ReminderSettings: View {
             }
         }
     }
+}
+
+private struct TodoReminderSettings: View {
+    @ObservedObject var reminders: TodoReminders
+    let todos: [FocusTodo]
+    var body: some View {
+        HStack {
+            Label("待办提醒", systemImage: "bell.badge")
+            Spacer()
+            Text(reminders.authorization == .allowed ? "已开启" : "未开启").foregroundStyle(.secondary)
+            Button("重试") { reminders.reconcile(todos: todos, requestPermission: true) }
+        }
+        if let issue = reminders.issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
+    }
+}
+
+private final class DurationSettingState: ObservableObject { @Published var text = "25" }
+private struct DefaultDurationSetting: View {
+    @ObservedObject var model: FocusModel
+    @StateObject private var field = DurationSettingState()
+    private var minutes: Int? {
+        guard let value = Int(field.text.precomposedStringWithCompatibilityMapping.trimmingCharacters(in: .whitespacesAndNewlines)), (1...180).contains(value) else { return nil }
+        return value
+    }
+    var body: some View {
+        LabeledContent("默认专注") {
+            TextField("分钟", text: $field.text).textFieldStyle(.roundedBorder).frame(width: 55)
+                .onSubmit(save).accessibilityLabel("默认专注分钟数").help("1–180 分钟，回车保存")
+            Text("分钟").foregroundStyle(.secondary)
+            Button("保存", action: save).disabled(minutes == nil || minutes == Int(model.state.focusDuration / 60))
+        }
+        .disabled(model.state.isActive || model.isBusy)
+        .onAppear { field.text = String(Int(model.state.focusDuration / 60)) }
+    }
+    private func save() { if let minutes { model.setFocusDuration(minutes) } }
 }

@@ -60,51 +60,45 @@ final class FocusAppearanceController: ObservableObject {
     }
 }
 
-/// An actual WindowServer backdrop. SwiftUI Material alone only blurs content
-/// inside an otherwise opaque window and cannot reveal the user's desktop.
+/// Vibrancy belongs to navigation and chrome; the task reading surface stays
+/// opaque so a busy desktop cannot reduce text contrast.
 struct NativeWindowMaterial: NSViewRepresentable {
     var opaque: Bool
 
-    func makeNSView(context: Context) -> BackdropView {
-        let view = BackdropView()
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
-        view.material = .hudWindow
-        view.state = .active
-        view.appearance = nil
+        view.state = .followsWindowActiveState
         return view
     }
 
-    func updateNSView(_ view: BackdropView, context: Context) {
-        view.material = opaque ? .windowBackground : .hudWindow
-        view.state = .active
-        // Inherit the same AppKit appearance as the window and text. A separate
-        // vibrantLight/vibrantDark override can drift after returning to Auto.
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = opaque ? .windowBackground : .sidebar
+        view.state = .followsWindowActiveState
         view.appearance = nil
     }
+}
 
-    final class BackdropView: NSVisualEffectView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            window?.isOpaque = false
-            window?.backgroundColor = .clear
-            window?.titlebarAppearsTransparent = true
+struct NativeSidebarSurface: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    /// Unshown tests can exercise either branch without changing system settings.
+    /// Production callers omit this and always honor the accessibility preference.
+    var forceOpaque: Bool? = nil
+
+    var body: some View {
+        Group {
+            if forceOpaque ?? reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                NativeWindowMaterial(opaque: false)
+            }
         }
+        .ignoresSafeArea()
     }
 }
 
 struct NativeWindowSurface: View {
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
     var body: some View {
-        ZStack {
-            NativeWindowMaterial(opaque: reduceTransparency)
-            if reduceTransparency {
-                (scheme == .dark ? FocusPalette.slate : FocusPalette.mist)
-            } else {
-                (scheme == .dark ? FocusPalette.slate : FocusPalette.mist).opacity(scheme == .dark ? 0.30 : 0.08)
-            }
-        }
-        .ignoresSafeArea()
+        Color(nsColor: .textBackgroundColor).ignoresSafeArea()
     }
 }

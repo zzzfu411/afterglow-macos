@@ -84,7 +84,12 @@ final class SystemReminderDelivery: NSObject, ReminderDelivery, UNUserNotificati
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         Task { @MainActor in
-            NSWorkspace.shared.open(URL(string: "afterglow://open")!)
+            if let raw = response.notification.request.content.userInfo["taskID"] as? String,
+               let id = UUID(uuidString: raw) {
+                NSWorkspace.shared.open(URL(string: "afterglow://todo/" + id.uuidString)!)
+            } else {
+                NSWorkspace.shared.open(URL(string: "afterglow://open")!)
+            }
             completionHandler()
         }
     }

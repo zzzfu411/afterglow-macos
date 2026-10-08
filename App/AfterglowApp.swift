@@ -14,7 +14,12 @@ struct AfterglowApp: App {
             FocusWindow(model: model)
                 .environment(\.colorScheme, appearance.colorScheme)
                 .focusedSceneObject(model)
-                .onOpenURL { _ in NSApp.activate(ignoringOtherApps: true) }
+                 .onOpenURL { url in
+                    NSApp.activate(ignoringOtherApps: true)
+                    if url.host == "todo", let id = UUID(uuidString: url.lastPathComponent) {
+                        Task { await model.flush(); model.openTodo(id) }
+                    }
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)

@@ -107,11 +107,12 @@ struct RuntimeTests {
         }
     }
 
-    private static func process(arguments: [String], output: Pipe? = nil) throws -> Process {
+    private static func process(arguments: [String], output: Pipe? = nil, input: Pipe? = nil) throws -> Process {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
         child.arguments = arguments
         if let output { child.standardOutput = output }
+        if let input { child.standardInput = input }
         try child.run()
         return child
     }
@@ -136,6 +137,21 @@ struct RuntimeTests {
             defer { flock(descriptor, LOCK_UN) }
             FileHandle.standardOutput.write(Data([1]))
             Thread.sleep(forTimeInterval: 4)
+        case "--edit-under-lock":
+            guard args.count == 4 else { throw CocoaError(.fileReadInvalidFileName) }
+            let descriptor = open(directory.appendingPathComponent("focus-state.lock").path, O_RDWR | O_CLOEXEC)
+            guard descriptor >= 0 else { throw FocusStoreError.fileLockFailed(errno) }
+            defer { close(descriptor) }
+            guard flock(descriptor, LOCK_EX) == 0 else { throw FocusStoreError.fileLockFailed(errno) }
+            defer { flock(descriptor, LOCK_UN) }
+            FileHandle.standardOutput.write(Data([1]))
+            guard FileHandle.standardInput.readData(ofLength: 1) == Data([1]) else { throw CocoaError(.fileReadUnknown) }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            let saved = try decoder.decode(FocusState.self, from: Data(contentsOf: directory.appendingPathComponent("focus-state.json")))
+            guard var item = saved.todos.first else { throw FocusStateError.invalidData }
+            item.title = args[3]; item.isCompleted = true
+            try write(saved.applying(.upsertTodo(item)), to: directory)
         default: throw CocoaError(.fileReadInvalidFileName)
         }
         return true
@@ -281,8 +297,11 @@ struct RuntimeTests {
         let directory = root.appendingPathComponent("model")
         try write(FocusState(task: "initial"), to: directory)
         let active = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
-        expect(active.reminders == nil && active.error == nil, "isolated model avoids the system notification service")
-        expect(active.showSidebar && active.allowsTimerKeyboard, "sidebar is visible by default without disabling timer keys")
+        await active.flush()
+        expect(active.reminders == nil && active.todoReminders == nil && active.error == nil,
+               "isolated model avoids all system notification services")
+        expect(active.state.task == "initial", "flush awaits the initial asynchronous read")
+        expect(active.showSidebar && active.allowsTimerKeyboard, "navigation is visible by default without blocking timer keys")
         try await noPolling(active, directory: directory, label: "idle")
 
         let writer = try process(arguments: ["--write-task", directory.path, "other-process"])
@@ -294,83 +313,139 @@ struct RuntimeTests {
             try external.update(.setTask("another-store-\(index)"))
             await waitUntil("model observes repeated atomic writes \(index)") { active.state.task == "another-store-\(index)" }
         }
+        await active.flush()
 
-        active.newTodo()
-        active.todoDraft?.title = "检查待办"
-        expect(!active.allowsTimerKeyboard, "editing in the sidebar suppresses timer shortcuts")
+        active.section = .inbox
+        active.quickEntryText = "检查待办"
+        active.quickAddTodo()
+        active.quickEntryText = "下一条尚未提交"
+        await active.flush()
+        expect(active.state.todos.count == 1 && active.state.todos[0].estimatedMinutes == nil,
+               "title-only quick entry creates a task without forcing an estimate")
+        expect(active.quickEntryText == "下一条尚未提交", "asynchronous save never clears text typed for the next task")
+        let todo = active.state.todos[0]
+        active.quickEntryText = ""
+        active.editTodo(todo.id)
+        active.todoDraft?.title = "仍在编辑"
+        active.editTodo(todo.id)
+        expect(active.todoDraft?.title == "仍在编辑", "clicking the same task preserves an unsaved draft")
         active.showSidebar = false
-        expect(active.allowsTimerKeyboard && active.todoDraft?.title == "检查待办", "collapsing the sidebar retains the draft and frees timer keys")
+        expect(active.todoDraft?.title == "仍在编辑" && !active.allowsTimerKeyboard,
+               "hiding navigation preserves the task draft and its keyboard protection")
         active.newTodo()
-        expect(active.showSidebar && active.todoDraft?.title == "检查待办" && !active.allowsTimerKeyboard,
-               "new-item command reopens an unfinished sidebar draft")
+        expect(active.todoDraft?.title == "仍在编辑", "requesting quick entry does not discard an unfinished edit")
         active.todoDraft?.minutes = "０"
         active.saveTodo()
-        expect(active.state.todos.isEmpty && active.todoDraft != nil, "invalid draft cannot save or disappear")
+        await active.flush()
+        expect(active.todoDraft != nil && active.state.todos[0].estimatedMinutes == nil, "invalid estimate cannot save or disappear")
         active.todoDraft?.minutes = "３０"
         let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
         active.todoDraft?.dueDate = dueDate
         active.saveTodo()
-        expect(active.state.todos.first?.minutes == 30 && active.todoDraft == nil, "draft saves normalized estimate and clears only on success")
-        expect(active.state.todos.first?.dueDate == dueDate && active.state.version == 3, "draft persists its optional due date")
-        expect(active.showSidebar && active.allowsTimerKeyboard, "saving returns to the persistent list with timer keys enabled")
-        let todo = active.state.todos[0]
-        active.send(.selectTarget(.todo(todo.id)))
-        expect(active.state.duration == 1800, "model selects a todo with its estimated deadline")
+        await active.flush()
+        expect(active.state.todos[0].estimatedMinutes == 30 && active.todoDraft == nil,
+               "draft saves the normalized estimate and clears only after successful persistence")
+        expect(active.state.todos[0].dueDate == dueDate && active.state.version == FocusState.currentVersion,
+               "optional deadline persists in the current data format")
+        let originalDuration = active.state.duration
+        active.selectFocusTarget(.todo(todo.id))
+        await active.flush()
+        expect(active.state.duration == originalDuration && active.state.duration != 1_800,
+               "task estimate does not become the next focus block duration")
         try await noPolling(active, directory: directory, label: "idle with todo list")
-        active.todoDraft = TodoDraft(item: todo)
-        expect(active.todoDraft?.dueDate == dueDate, "editing loads the saved due date")
+
+        active.editTodo(todo.id)
         active.todoDraft?.title = "编辑后的待办"
-        active.saveTodo()
-        expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办", "draft edits do not duplicate existing item")
-        expect(active.state.todos[0].dueDate == dueDate, "title-only edit retains the deadline")
-        active.todoDraft = TodoDraft(item: active.state.todos[0])
         active.todoDraft?.dueDate = nil
         active.saveTodo()
-        expect(active.state.todos[0].dueDate == nil && active.state.version == 3, "draft can clear a deadline without downgrading the file")
-        active.showSidebar = true
-        expect(active.selectFocusTarget(.todo(todo.id)) && active.showSidebar && !active.state.todos[0].isCompleted,
-               "focus selection keeps the sidebar open and does not complete the item")
-        active.todoToDelete = todo
-        expect(!active.allowsTimerKeyboard, "delete confirmation blocks timer shortcuts even with a persistent sidebar")
-        active.todoToDelete = nil
-        expect(active.allowsTimerKeyboard, "cancelling deletion restores timer shortcuts")
+        await active.flush()
+        expect(active.state.todos.count == 1 && active.state.todos[0].title == "编辑后的待办",
+               "editing does not duplicate the existing item")
+        expect(active.state.todos[0].dueDate == nil && active.state.version == FocusState.currentVersion,
+               "a deadline can be cleared without downgrading data")
+        active.editTodo(todo.id)
+        active.todoDraft?.title = "提交的版本"
+        active.saveTodo()
+        active.todoDraft?.title = "写入期间继续编辑"
+        await active.flush()
+        expect(active.state.todos[0].title == "提交的版本" && active.todoDraft?.title == "写入期间继续编辑",
+               "saving one draft snapshot never clears edits made while the write was in flight")
+        active.saveTodo()
+        await active.flush()
+        expect(active.state.todos[0].title == "写入期间继续编辑" && active.todoDraft == nil,
+               "the retained draft can be saved against the newly persisted version")
+        active.quickEntryText = "计时中仍可整理的任务"
+        active.quickAddTodo()
+        await active.flush()
+        let other = active.state.todos.first { $0.id != todo.id }!
         active.send(.selectDuration(480))
+        await active.flush()
+        active.startFocus(todo.id)
+        await active.flush()
+        let runningID = active.state.sessionID
+        let runningDeadline = active.state.deadline
+        expect(active.state.status == .running && active.state.sessionTodoIDs == [todo.id], "a task starts one independent focus block")
+        active.selectTodo(other.id)
+        active.editTodo(other.id)
+        active.todoDraft?.notes = "专注期间整理，不影响计时"
+        active.saveTodo()
+        await active.flush()
+        expect(active.selectedTodoID == other.id && active.state.sessionTodoIDs == [todo.id],
+               "list selection and editing remain independent from the active focus task")
+        expect(active.state.deadline == runningDeadline && active.state.sessionID == runningID,
+               "editing another task cannot change the running deadline or session identity")
+        active.completeTodo(other.id)
+        await active.flush()
+        expect(active.canUndoTodo && active.state.todos.first { $0.id == other.id }?.isCompleted == true,
+               "completion creates a reversible task operation")
+        active.undoTodoChange()
+        await active.flush()
+        expect(active.canRedoTodo && active.state.todos.first { $0.id == other.id }?.isCompleted == false,
+               "undo restores only the completed task")
+        expect(active.state.deadline == runningDeadline && active.state.sessionID == runningID,
+               "task undo never rolls back the active timer")
+        active.redoTodoChange()
+        await active.flush()
+        expect(active.state.todos.first { $0.id == other.id }?.isCompleted == true, "redo reapplies task completion")
         active.completeTodo(todo.id)
-        expect(active.completionUndo?.item.id == todo.id && active.state.todos[0].isCompleted, "completion exposes a single undo action")
-        try await noPolling(active, directory: directory, label: "idle with completion undo")
-        active.undoTodoCompletion()
-        expect(active.completionUndo == nil && !active.state.todos[0].isCompleted
-               && active.state.focusTarget == .todo(todo.id) && active.state.duration == 480, "model undo restores task selection and adjusted time")
+        await active.flush()
+        let settledLogs = active.state.logs
+        expect(active.state.status == .done && !settledLogs.isEmpty, "completing the active task settles its real elapsed time")
+        active.undoTodoChange()
+        await active.flush()
+        expect(active.state.status == .done && active.state.logs == settledLogs
+               && active.state.todos.first { $0.id == todo.id }?.isCompleted == false,
+               "undoing completion does not restart a settled focus or rewrite its history")
+
+        active.trashTodo(todo.id)
+        await active.flush()
+        expect(active.state.todos.first { $0.id == todo.id }?.isDeleted == true, "delete moves a task into reversible trash")
+        active.restoreTodo(todo.id)
+        await active.flush()
+        expect(active.state.todos.first { $0.id == todo.id }?.isPending == true, "restore recovers a deleted pending task")
         active.completeTodo(todo.id)
-        active.showSidebar = false
-        active.showSidebar = true
-        expect(active.completionUndo != nil, "undo survives sidebar collapse")
-        active.send(.setTodoCompleted(todo.id, false))
-        expect(active.completionUndo == nil && !active.state.todos[0].isCompleted, "explicit restore clears stale undo feedback")
-        active.completeTodo(todo.id)
+        await active.flush()
         let diskFile = directory.appendingPathComponent("focus-state.json")
         let savedCompletion = try Data(contentsOf: diskFile)
         try Data("invalid".utf8).write(to: diskFile, options: .atomic)
-        active.undoTodoCompletion()
-        expect(active.error != nil && active.completionUndo != nil && active.state.todos[0].isCompleted,
-               "failed undo keeps its receipt and visible state for retry")
+        active.undoTodoChange()
+        await active.flush()
+        expect(active.error != nil && active.canUndoTodo && active.state.todos.first { $0.id == todo.id }?.isCompleted == true,
+               "failed undo preserves its receipt and last known task state")
         try savedCompletion.write(to: diskFile, options: .atomic)
         active.retryStorage()
-        active.undoTodoCompletion()
-        expect(active.error == nil && active.completionUndo == nil && !active.state.todos[0].isCompleted, "undo can retry safely after storage recovery")
-        active.showSidebar = true
-        expect(!active.selectFocusTarget(.todo(UUID())) && active.showSidebar, "stale selection leaves the sidebar and current plan intact")
-        active.showSidebar = false
+        await active.flush()
+        active.undoTodoChange()
+        await active.flush()
+        expect(active.error == nil && active.state.todos.first { $0.id == todo.id }?.isPending == true,
+               "undo safely retries after storage recovery")
 
-        active.send(.start)
-        active.showSidebar = true
-        expect(!active.selectFocusTarget(.todo(todo.id)) && active.showSidebar && active.state.status == .running,
-               "active focus selection cannot silently discard the current session")
-        active.showSidebar = false
+        active.startFocus(todo.id)
+        await active.flush()
         active.send(.pause)
+        await active.flush()
         expect(active.state.status == .paused, "model pauses the running timer")
         try await noPolling(active, directory: directory, label: "paused")
-
         var completions = 0
         let subscription = active.$state.sink { if $0.status == .done { completions += 1 } }
         defer { subscription.cancel() }
@@ -380,54 +455,207 @@ struct RuntimeTests {
         await waitUntil("external running state arms a deadline timer", timeout: 1) {
             active.state.sessionID == almostDone.sessionID && active.state.status == .running
         }
-        // No manual refresh or other file writes: only the production one-shot
-        // timer can settle this already observed session at its deadline.
         await waitUntil("one-shot deadline settles the session", timeout: 3) { active.state.status == .done }
         expect(active.state.logs.count == 1 && active.state.logs[0].completed, "deadline records exactly one completed session")
         expect(abs(active.state.logs[0].endedAt.timeIntervalSince(almostDone.deadline!)) < 0.001,
                "completion retains the original deadline")
-        let completedFile = try FileSnapshot(directory.appendingPathComponent("focus-state.json"))
-        active.refresh()
-        active.refresh()
-        await delay(0.15)
+        let completedFile = try FileSnapshot(diskFile)
+        active.refresh(); active.refresh()
+        await active.flush()
         expect(completions == 1 && active.state.logs.count == 1, "watcher echoes and repeated refreshes do not duplicate completion")
-        expect(try FileSnapshot(directory.appendingPathComponent("focus-state.json")) == completedFile,
-               "settled sessions do not repeatedly rewrite history")
-
+        expect(try FileSnapshot(diskFile) == completedFile, "settled sessions do not repeatedly rewrite history")
         let cancellation = FocusState(duration: 60).applying(.start, at: Date().addingTimeInterval(-59))
         try write(cancellation, to: directory)
         await waitUntil("new external session replaces the previous deadline") { active.state.sessionID == cancellation.sessionID }
         active.send(.pause)
+        await active.flush()
         await delay(1.2)
         expect(active.state.status == .paused && active.state.logs.isEmpty, "pausing invalidates the pending deadline callback")
         expect(active.error == nil, "event-driven model completes without storage errors")
 
-        let preserved = try Data(contentsOf: directory.appendingPathComponent("focus-state.json"))
-        try Data("invalid".utf8).write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
+        let preserved = try Data(contentsOf: diskFile)
+        try Data("invalid".utf8).write(to: diskFile, options: .atomic)
         await waitUntil("unreadable data exposes a recoverable error") { active.error != nil }
-        active.newTodo()
+        active.todoDraft = TodoDraft()
         active.todoDraft?.title = "写入失败时保留"
         active.saveTodo()
-        expect(active.todoDraft?.title == "写入失败时保留", "failed persistence keeps draft intact")
-        try preserved.write(to: directory.appendingPathComponent("focus-state.json"), options: .atomic)
+        await active.flush()
+        expect(active.todoDraft?.title == "写入失败时保留", "failed persistence keeps the draft intact")
+        try preserved.write(to: diskFile, options: .atomic)
         active.retryStorage()
-        expect(active.error == nil && active.state.status == .paused, "retry clears the error after storage recovers without resetting the timer")
+        await active.flush()
+        expect(active.error == nil && active.state.status == .paused, "storage recovery does not reset the timer")
     }
 
-    @MainActor private static func sidebarPreferencesTest(_ root: URL) throws {
+    @MainActor private static func sidebarPreferencesTest(_ root: URL) async throws {
         let suite = "afterglow-sidebar-tests-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = FocusStore(directory: root.appendingPathComponent("sidebar-preferences"))
         let first = FocusModel(store: store, remindersEnabled: false, preferences: defaults)
-        expect(first.showSidebar, "new installs show the sidebar")
+        await first.flush()
+        expect(first.showSidebar, "new installs show navigation")
         let before = try store.snapshot()
         first.showSidebar = false
         let reopened = FocusModel(store: store, remindersEnabled: false, preferences: defaults)
+        await reopened.flush()
         expect(!reopened.showSidebar, "relaunch remembers a deliberately collapsed sidebar")
+        let request = reopened.quickEntryRequest
         reopened.newTodo()
-        expect(reopened.showSidebar && defaults.bool(forKey: "afterglow.sidebar-visible"), "add reveals the sidebar and updates its preference")
-        expect(try store.snapshot() == before, "sidebar preferences and draft creation never alter timer data")
+        expect(reopened.quickEntryRequest == request + 1 && !reopened.showSidebar,
+               "quick entry works in the main list without expanding collapsed navigation")
+        expect(try store.snapshot() == before, "navigation preferences and quick entry focus never alter stored data")
+    }
+
+    @MainActor private static func asynchronousQueueTests(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("asynchronous-queue")
+        try write(FocusState(), to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        await delay(0.15)
+        let ready = Pipe()
+        let holder = try process(arguments: ["--hold-lock", directory.path], output: ready)
+        defer { if holder.isRunning { holder.terminate() }; holder.waitUntilExit() }
+        expect(ready.fileHandleForReading.readData(ofLength: 1) == Data([1]), "blocked-write lock probe started")
+        model.quickEntryText = "等待锁的事项"
+        model.quickAddTodo()
+        var didFlush = false
+        let waiter = Task { @MainActor in await model.flush(); didFlush = true }
+        await delay(0.1)
+        expect(!didFlush && model.isBusy, "flush waits for an asynchronous transaction blocked on the file lock")
+        model.quickEntryText = "后续仍可输入"
+        expect(model.state.todos.isEmpty, "main actor remains responsive without pretending the blocked write succeeded")
+        holder.terminate(); holder.waitUntilExit()
+        await waiter.value
+        expect(model.state.todos.count == 1 && model.quickEntryText == "后续仍可输入" && !model.isBusy,
+               "flush returns after persistence and preserves text typed during the write")
+
+        await delay(0.15)
+        let intentReady = Pipe()
+        let intentHolder = try process(arguments: ["--hold-lock", directory.path], output: intentReady)
+        defer { if intentHolder.isRunning { intentHolder.terminate() }; intentHolder.waitUntilExit() }
+        expect(intentReady.fileHandleForReading.readData(ofLength: 1) == Data([1]), "blocked-intent lock probe started")
+        var intentFinished = false
+        let intent = Task { @MainActor in try await model.performIntent(.toggle); intentFinished = true }
+        await delay(0.1)
+        var intentFlushed = false
+        let intentWaiter = Task { @MainActor in await model.flush(); intentFlushed = true }
+        await delay(0.1)
+        expect(!intentFinished && !intentFlushed, "flush also waits for an in-flight system intent")
+        intentHolder.terminate(); intentHolder.waitUntilExit()
+        try await intent.value
+        await intentWaiter.value
+        expect(model.state.status == .running && intentFlushed, "system intent commits through the same awaited queue")
+    }
+
+    @MainActor private static func presentationAndScaleTests(_ root: URL) async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let today = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 12))!
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        var planned = FocusTodo(title: "安排到今天", plannedDate: calendar.startOfDay(for: today))
+        expect(TodoSection.today.contains(planned, at: today, calendar: calendar), "planned date places a task in Today")
+        expect(!TodoSection.upcoming.contains(planned, at: today, calendar: calendar), "Today is not incorrectly tomorrow across DST")
+        planned.plannedDate = tomorrow
+        expect(TodoSection.upcoming.contains(planned, at: today, calendar: calendar), "future plan enters Upcoming")
+        planned.dueDate = calendar.date(byAdding: .day, value: -1, to: today)
+        expect(TodoSection.today.contains(planned, at: today, calendar: calendar), "an overdue deadline remains visible even with a future plan")
+        planned.isCompleted = true
+        expect(!TodoSection.today.contains(planned, at: today, calendar: calendar)
+               && TodoSection.completed.contains(planned, at: today, calendar: calendar), "completed tasks leave planning views")
+        let custom = TodoSection.collection(UUID())
+        expect(TodoSection(key: custom.persistenceKey) == custom, "custom-list navigation round-trips through preferences")
+        var draft = TodoDraft()
+        draft.title = "仅标题"
+        expect(draft.isValid && draft.applying(to: nil).estimatedMinutes == nil, "a title-only draft is valid")
+        draft.minutes = "２４０"
+        expect(draft.isValid && draft.applying(to: nil).estimatedMinutes == 240, "task estimates may exceed one focus session")
+
+        let directory = root.appendingPathComponent("scale")
+        var state = FocusState()
+        var list = FocusTodoList()
+        // Legacy migrations have equal ordering values: this catches a quadratic
+        // fallback comparator that a newly created, uniquely ordered list misses.
+        list.items = (0..<1_000).map { FocusTodo(title: String(format: "任务 %04d", $0), notes: "本地检索", sortOrder: 0) }
+        state.todoList = list
+        try write(state, to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        model.section = .all
+        expect(model.visibleTodoCount == 1_000 && model.visibleTodos.count == 100 && model.hasMoreTodos,
+               "a thousand tasks render only the first page")
+        expect(model.visibleTodos.map(\.id) == Array(list.items.prefix(100)).map(\.id), "equal-order legacy tasks retain stable insertion order")
+        model.loadMoreTodos()
+        expect(model.visibleTodos.count == 200, "loading another page grows the visible slice only on demand")
+        var searchSamples: [Double] = []
+        var listSamples: [Double] = []
+        for index in 0..<20 {
+            let listStart = CFAbsoluteTimeGetCurrent()
+            model.searchText = ""
+            listSamples.append((CFAbsoluteTimeGetCurrent() - listStart) * 1_000)
+            let searchStart = CFAbsoluteTimeGetCurrent()
+            model.searchText = index.isMultiple(of: 2) ? "任务 00" : "本地"
+            searchSamples.append((CFAbsoluteTimeGetCurrent() - searchStart) * 1_000)
+        }
+        let listP95 = listSamples.sorted()[18]
+        let searchP95 = searchSamples.sorted()[18]
+        print(String(format: "PERF: 1,000 equal-order tasks, list p95 %.2f ms, search p95 %.2f ms (-O)", listP95, searchP95))
+        expect(listP95 < 100 && searchP95 < 150, "thousand-task list and search meet the planned response targets")
+        model.searchText = "任务 0999"
+        expect(model.visibleTodoCount == 1 && model.visibleTodos[0].id == list.items[999].id,
+               "search finds tasks beyond the currently loaded page")
+        model.searchText = ""
+        expect(model.visibleTodos.count == 100, "leaving search resets to bounded paging")
+    }
+
+    @MainActor private static func concurrentDraftTest(_ root: URL) async throws {
+        let directory = root.appendingPathComponent("concurrent-draft")
+        let original = FocusTodo(title: "原始标题")
+        try write(FocusState().applying(.addTodo(original)), to: directory)
+        let model = FocusModel(store: FocusStore(directory: directory), remindersEnabled: false)
+        await model.flush()
+        await delay(0.15)
+        model.editTodo(original.id)
+        model.todoDraft?.title = "本地未保存修改"
+        let ready = Pipe(), release = Pipe()
+        let editor = try process(arguments: ["--edit-under-lock", directory.path, "另一个进程已更新"],
+                                 output: ready, input: release)
+        defer { if editor.isRunning { editor.terminate() }; editor.waitUntilExit() }
+        expect(ready.fileHandleForReading.readData(ofLength: 1) == Data([1]), "concurrent edit owns the lock before local save")
+        model.saveTodo()
+        await waitUntil("local task save waits behind the external edit") {
+            ((try? descriptors(for: directory.appendingPathComponent("focus-state.lock"))) ?? 0) > 0
+        }
+        try release.fileHandleForWriting.write(contentsOf: Data([1]))
+        await waitUntil("external edit completes") { !editor.isRunning }
+        expect(editor.terminationStatus == 0, "concurrent edit test process succeeded")
+        await model.flush()
+        await waitUntil("model accepts the external task after the write conflict") {
+            model.state.todos.first?.title == "另一个进程已更新"
+        }
+        let disk = try FocusStore(directory: directory).snapshot()
+        expect(disk.todos.first?.title == "另一个进程已更新" && disk.todos.first?.isCompleted == true,
+               "a stale draft never overwrites external edits or reverses external completion")
+        expect(model.error != nil && model.todoDraft?.title == "本地未保存修改" && !model.canUndoTodo,
+               "write conflict preserves the local draft and creates no invalid undo receipt")
+
+        model.cancelTodoDraft(); model.error = nil; model.notice = nil
+        model.editTodo(original.id)
+        model.todoDraft?.notes = "仍在输入的本地备注"
+        let external = FocusStore(directory: directory)
+        var externallyEdited = try external.snapshot().todos[0]
+        externallyEdited.title = "草稿打开后收到的新标题"
+        try external.performTodoAction(.upsertTodo(externallyEdited))
+        await waitUntil("open draft receives an external model refresh") {
+            model.state.todos.first?.title == externallyEdited.title
+        }
+        model.saveTodo()
+        await model.flush()
+        let afterRefreshConflict = try external.snapshot().todos[0]
+        expect(afterRefreshConflict.title == externallyEdited.title && afterRefreshConflict.notes.isEmpty,
+               "a draft cannot silently overwrite an external edit already delivered to the model")
+        expect(model.todoDraft?.notes == "仍在输入的本地备注" && (model.error != nil || model.notice != nil),
+               "the original draft baseline detects edit conflicts and preserves unsaved text")
     }
 
     @MainActor private static func modelReleaseTest(_ root: URL) async throws {
@@ -455,17 +683,20 @@ struct RuntimeTests {
                 await reminderTests()
                 try await observationTests(directory)
                 try await modelTests(directory)
-                try sidebarPreferencesTest(directory)
+                try await sidebarPreferencesTest(directory)
+                try await asynchronousQueueTests(directory)
+                try await concurrentDraftTest(directory)
+                try await presentationAndScaleTests(directory)
                 try await modelReleaseTest(directory)
             } catch { failure = error }
             finished = true
         }
-        let timeout = Date().addingTimeInterval(45)
+        let timeout = Date().addingTimeInterval(75)
         while !finished, Date() < timeout {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         expect(finished, "runtime regression suite finishes within its timeout")
         if let failure { throw failure }
-        print("PASS: \(checks) runtime checks; notification races, atomic directory events, cross-process updates, one-shot completion, and no idle polling.")
+        print("PASS: \(checks) runtime checks; notification races, asynchronous storage, reversible todos, thousand-task responsiveness, one-shot completion, and no idle polling.")
     }
 }

@@ -1,16 +1,17 @@
 import Foundation
 
-/// Keep the timer readable at the minimum size without stretching a compact
-/// utility into a full-window dashboard when the window is enlarged.
+/// The task list owns the window. Focus mode reuses a compact, bounded layout.
 struct FocusWindowLayout {
-    static let minimumSize = CGSize(width: 320, height: 400)
-    static let defaultSize = CGSize(width: 620, height: 480)
+    static let minimumSize = CGSize(width: 360, height: 400)
+    static let defaultSize = CGSize(width: 760, height: 540)
     static let timerReferenceSize = CGSize(width: 348, height: 430)
     static let sidebarMinimumWidth: CGFloat = 160
-    static let sidebarIdealWidth: CGFloat = 210
-    static let sidebarMaximumWidth: CGFloat = 340
+    static let sidebarIdealWidth: CGFloat = 196
+    static let sidebarMaximumWidth: CGFloat = 260
 
-    /// A restored or user-resized sidebar must leave room for the timer.
+    static let sidebarCollapseWidth: CGFloat = 560
+
+    /// A restored or user-resized sidebar must leave a readable task list.
     static func sidebarWidthLimit(windowWidth: CGFloat) -> CGFloat {
         min(sidebarMaximumWidth, max(sidebarMinimumWidth, windowWidth - minimumSize.width - 1))
     }
