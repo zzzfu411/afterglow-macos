@@ -79,7 +79,6 @@ public enum TodoTransfer {
     public static let maximumFileBytes = FocusStore.maximumFileBytes
 
     public static func archive(from state: FocusState, at date: Date = Date()) throws -> TodoArchive {
-        try state.validate()
         let archive = TodoArchive(todos: state.todos, collections: state.todoList?.collections ?? [], exportedAt: date)
         try archive.validate()
         return archive
@@ -154,8 +153,7 @@ public enum TodoTransfer {
     public static func mergeArchive(_ archive: TodoArchive, into store: FocusStore,
                                     preview: TodoImportPreview? = nil, at now: Date = Date()) throws -> (state: FocusState, undo: TodoUndoRecord?) {
         try archive.validate()
-        // Archives constructed in memory must obey the same byte budget as files.
-        _ = try encode(archive)
+        // The store checks the final encoded file size, including merged content.
         if let preview, preview.source != archive { throw TodoTransferError.previewMismatch }
         return try store.mergeTodos(archive.todos, collections: archive.collections,
                                     expectedTodos: preview?.expectedTodos, expectedCollections: preview?.expectedCollections, at: now)

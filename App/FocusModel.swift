@@ -92,8 +92,6 @@ final class FocusModel: ObservableObject {
     @Published private(set) var visibleTodos: [FocusTodo] = []
     @Published private(set) var visibleTodoCount = 0
     @Published private(set) var collections: [TodoCollection] = []
-    @Published private(set) var canUndoTodo = false
-    @Published private(set) var canRedoTodo = false
     let reminders: FocusReminders?
     let todoReminders: TodoReminders?
     private let store: FocusStore
@@ -108,14 +106,15 @@ final class FocusModel: ObservableObject {
     private var operation: Task<Void, Never>?
     private var pendingWrites = 0
     private var refreshPending = false
-    private var pendingForceRefresh = false
-    private var refreshAgain = false
+    private var queuedRefresh: Bool?
     private var pageSize = 100
     private var counts: [TodoSection: Int] = [:]
-    private var undoStack: [TodoUndoRecord] = []
-    private var redoStack: [TodoUndoRecord] = []
+    @Published private var undoStack: [TodoUndoRecord] = []
+    @Published private var redoStack: [TodoUndoRecord] = []
 
     var shared: Bool { store.isShared }
+    var canUndoTodo: Bool { !undoStack.isEmpty }
+    var canRedoTodo: Bool { !redoStack.isEmpty }
     func summary(for id: UUID) -> TodoFocusSummary? { focusSummaries[id] }
     var queueProgress: String? { focusQueue.isEmpty ? nil : "\(queueIndex + 1)/\(focusQueue.count)" }
     private var nextQueueIndex: Int? {
@@ -193,14 +192,13 @@ final class FocusModel: ObservableObject {
         observeStore(); refresh(force: true); scheduleDayBoundary()
     }
     func refresh(force: Bool = false) {
-        guard !refreshPending else { refreshAgain = true; pendingForceRefresh = pendingForceRefresh || force; return }
+        guard !refreshPending else { queuedRefresh = (queuedRefresh ?? false) || force; return }
         refreshPending = true
         enqueue(write: false, force: force, work: { try await $0.snapshot() }, success: { [weak self] _ in
             guard let self else { return }
             self.refreshPending = false
-            if self.refreshAgain {
-                let force = self.pendingForceRefresh
-                self.refreshAgain = false; self.pendingForceRefresh = false; self.refresh(force: force)
+            if let force = self.queuedRefresh {
+                self.queuedRefresh = nil; self.refresh(force: force)
             }
         }, failure: { [weak self] _ in self?.refreshPending = false })
     }
@@ -217,7 +215,7 @@ final class FocusModel: ObservableObject {
         guard !isBusy else { return }
         enqueue(work: { try await $0.todos(actions) }, success: { [weak self] change in
             guard let self else { return }
-            if let undo = change.undo { self.pushUndo(undo); self.redoStack.removeAll(); self.updateUndoAvailability() }
+            if let undo = change.undo { self.pushUndo(undo); self.redoStack.removeAll() }
             if permission { self.todoReminders?.reconcile(todos: change.state.todos, requestPermission: true) }
             success()
         })
@@ -231,7 +229,7 @@ final class FocusModel: ObservableObject {
         guard item.isValid else { throw FocusStoreError.invalidTodoAction }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             enqueue(work: { try await $0.todos([.upsertTodo(item)]) }, success: { [weak self] change in
-                if let undo = change.undo { self?.pushUndo(undo); self?.redoStack.removeAll(); self?.updateUndoAvailability() }
+                if let undo = change.undo { self?.pushUndo(undo); self?.redoStack.removeAll() }
                 continuation.resume()
             }, failure: { continuation.resume(throwing: $0) })
         }
@@ -339,7 +337,7 @@ final class FocusModel: ObservableObject {
         pendingImport = nil
         enqueue(work: { try await $0.merge(request) }, success: { [weak self] change in
             guard let self else { return }
-            if let undo = change.undo { self.pushUndo(undo); self.redoStack.removeAll(); self.updateUndoAvailability() }
+            if let undo = change.undo { self.pushUndo(undo); self.redoStack.removeAll() }
             self.searchText = ""; self.section = .all; self.notice = "待办已导入"
             self.todoReminders?.reconcile(todos: change.state.todos, requestPermission: true)
         })
@@ -387,7 +385,6 @@ final class FocusModel: ObservableObject {
             if self?.todoDraft?.listID == id { self?.todoDraft?.listID = nil; self?.todoDraft?.baseItem?.listID = nil }
         }
     }
-    func undoTodoCompletion() { undoTodoChange() }
     func undoTodoChange() { applyUndo(redo: false) }
     func redoTodoChange() { applyUndo(redo: true) }
     private func applyUndo(redo: Bool) {
@@ -396,15 +393,13 @@ final class FocusModel: ObservableObject {
             guard let self else { return }
             if redo { self.redoStack.removeLast(); if let inverse = result.undo { self.pushUndo(inverse) } }
             else { self.undoStack.removeLast(); if let inverse = result.undo { self.redoStack.append(inverse) } }
-            self.updateUndoAvailability(); self.notice = redo ? "已重做" : "已撤销"
+            self.notice = redo ? "已重做" : "已撤销"
         })
     }
     private func pushUndo(_ record: TodoUndoRecord) {
         undoStack.append(record)
         while undoStack.count > 20 || undoStack.reduce(0, { $0 + $1.estimatedByteCount }) > 4_000_000 { undoStack.removeFirst() }
-        updateUndoAvailability()
     }
-    private func updateUndoAvailability() { canUndoTodo = !undoStack.isEmpty; canRedoTodo = !redoStack.isEmpty }
 
     func startFocus(_ id: UUID, minutes: Int? = nil) {
         guard state.todos.contains(where: { $0.id == id && $0.isPending }), !isBusy,

@@ -130,13 +130,6 @@ public struct TodoFocusSummary: Equatable, Sendable {
     public init() {}
 }
 
-struct PreparedTodoChange {
-    let item: FocusTodo
-    let nextOccurrence: FocusTodo?
-    let index: Int?
-    let completesCurrentTask: Bool
-}
-
 public enum FocusStateError: Error, LocalizedError {
     case invalidData
 
@@ -246,6 +239,17 @@ public struct FocusState: Codable, Equatable, Sendable {
 
     /// Pure transitions. The caller supplies a timestamp and can supply an ID for tests.
     public func applying(_ action: FocusAction, at now: Date = Date(), sessionID newID: UUID = UUID()) -> FocusState {
+        do { return try applyingChecked(action, at: now, sessionID: newID) }
+        catch {
+            // Pure callers ignore invalid edits; storage callers surface the error.
+            var result = self
+            if status == .running && remaining(at: now) == 0 { result.end(at: now) }
+            return result
+        }
+    }
+
+    /// One transition path owns action validation and execution.
+    func applyingChecked(_ action: FocusAction, at now: Date, sessionID newID: UUID = UUID()) throws -> FocusState {
         var result = self
         let expiredWhileRunning = status == .running && remaining(at: now) == 0
         if expiredWhileRunning { result.end(at: now) }
@@ -281,7 +285,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             guard result.status == .done else { return result }
             let next: FocusMode = result.mode == .focus ? .rest : .focus
             result.resetTimer(mode: next, duration: next == .focus ? result.plannedFocusDuration : result.restDuration)
-            return result.applying(.start, at: now, sessionID: newID)
+            return try result.applyingChecked(.start, at: now, sessionID: newID)
         case .reset:
             guard !result.isActive else { return result }
             result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
@@ -301,44 +305,45 @@ public struct FocusState: Codable, Equatable, Sendable {
             guard !result.todos.contains(where: { $0.id == item.id }) else { return result }
             var created = item
             if created.createdAt == nil { created.createdAt = now }
-            result.upsert(created, at: now)
+            try result.upsert(created, at: now)
         case .upsertTodo(let item):
-            result.upsert(item, at: now)
+            try result.upsert(item, at: now)
         case .replaceTodo(let expected, let replacement):
             guard expected.id == replacement.id,
-                  result.todos.first(where: { $0.id == expected.id }) == expected else { return result }
-            result.upsert(replacement, at: now)
+                  result.todos.first(where: { $0.id == expected.id }) == expected else { throw FocusStoreError.editConflict }
+            try result.upsert(replacement, at: now)
         case .editTodo(let id, let title, let minutes, let dueDate):
             guard var item = result.todos.first(where: { $0.id == id && !$0.isDeleted }) else { return result }
             item.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             item.estimatedMinutes = minutes
             item.dueDate = dueDate
             item.hasDueTime = dueDate != nil
-            result.upsert(item, at: now)
+            try result.upsert(item, at: now)
         case .deleteTodo(let id), .trashTodo(let id):
             guard let index = result.todos.firstIndex(where: { $0.id == id && !$0.isDeleted }) else { return result }
             result.editList { $0.items[index].deletedAt = now }
         case .restoreTodo(let id):
             guard var item = result.todos.first(where: { $0.id == id && $0.isDeleted }) else { return result }
             item.deletedAt = nil
-            result.upsert(item, at: now)
+            try result.upsert(item, at: now)
         case .purgeTodos(let ids):
             let requested = Set(ids)
-            guard requested.count == ids.count, requested.isSubset(of: Set(result.todos.filter(\.isDeleted).map(\.id))) else { return result }
+            guard requested.count == ids.count, requested.isSubset(of: Set(result.todos.filter(\.isDeleted).map(\.id))) else { throw FocusStoreError.invalidTodoAction }
             result.editList { $0.items.removeAll { requested.contains($0.id) } }
         case .setTodoCompleted(let id, let completed):
             guard var item = result.todos.first(where: { $0.id == id && !$0.isDeleted }), item.isCompleted != completed else { return result }
             item.isCompleted = completed
             item.completedAt = completed ? now : nil
-            result.upsert(item, at: now)
+            try result.upsert(item, at: now)
         case .undoTodoCompletion(let undo):
-            if let restored = try? result.applyingTodoUndo(undo.record) { result = restored }
+            result = try result.applyingTodoUndo(undo.record)
         case .upsertCollection(let collection):
-            guard collection.isValid else { return result }
+            guard collection.isValid else { throw FocusStoreError.invalidTodoAction }
             let collections = result.todoList?.collections ?? []
             if let index = collections.firstIndex(where: { $0.id == collection.id }) {
                 result.editList { $0.collections[index] = collection }
-            } else if collections.count < TodoCollection.maximumCount {
+            } else {
+                guard collections.count < TodoCollection.maximumCount else { throw FocusStoreError.todoCapacityReached }
                 result.editList { $0.collections.append(collection) }
             }
         case .deleteCollection(let id):
@@ -349,12 +354,13 @@ public struct FocusState: Codable, Equatable, Sendable {
                 for index in list.items.indices where list.items[index].listID == id { list.items[index].listID = nil }
             }
         case .reorderTodos(let ids):
-            guard !ids.isEmpty, ids.count <= FocusTodo.maximumCount, Set(ids).count == ids.count else { return result }
+            guard !ids.isEmpty else { return result }
             let requested = Set(ids)
+            guard ids.count <= FocusTodo.maximumCount, requested.count == ids.count else { throw FocusStoreError.invalidTodoAction }
             let pending = result.todos.enumerated().filter { $0.element.isPending }.sorted {
                 $0.element.sortOrder == $1.element.sortOrder ? $0.offset < $1.offset : $0.element.sortOrder < $1.element.sortOrder
             }.map(\.element)
-            guard requested.isSubset(of: Set(pending.map(\.id))) else { return result }
+            guard requested.isSubset(of: Set(pending.map(\.id))) else { throw FocusStoreError.invalidTodoAction }
             // Reorder only the visible subset within its existing slots. Tasks
             // hidden by a filter keep their relative positions.
             var reorderedIDs = ids.makeIterator()
@@ -370,7 +376,7 @@ public struct FocusState: Codable, Equatable, Sendable {
             var list = result.todoList ?? FocusTodoList()
             if list.target != target { list.durationOverride = nil }
             list.target = target
-            guard target == .free || !list.selected.isEmpty else { return result }
+            guard target == .free || !list.selected.isEmpty else { throw FocusStoreError.invalidTodoAction }
             result.todoList = list
             result.version = Self.currentVersion
             result.resetTimer(mode: .focus, duration: result.plannedFocusDuration)
@@ -517,9 +523,8 @@ public struct FocusState: Codable, Equatable, Sendable {
         return result
     }
 
-    /// Shared by pure transitions and the store's throwing preflight. Generation
-    /// and capacity checks happen before a completion can stop real focus time.
-    func preparingTodoUpsert(_ supplied: FocusTodo, at now: Date) throws -> PreparedTodoChange {
+    /// Validate once, then apply the task and its optional next occurrence.
+    private mutating func upsert(_ supplied: FocusTodo, at now: Date) throws {
         var item = supplied
         item.title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard item.isValid,
@@ -550,17 +555,11 @@ public struct FocusState: Codable, Equatable, Sendable {
         if nextOccurrence != nil {
             nextOccurrence?.sortOrder = min(1_000_000_000, max(todos.map(\.sortOrder).max() ?? -1, item.sortOrder) + 1)
         }
-        return PreparedTodoChange(item: item, nextOccurrence: nextOccurrence, index: index,
-                                  completesCurrentTask: newlyCompleted && mode == .focus && isActive && sessionTodoIDs == [item.id])
-    }
-
-    private mutating func upsert(_ supplied: FocusTodo, at now: Date) {
-        guard let change = try? preparingTodoUpsert(supplied, at: now) else { return }
-        if change.completesCurrentTask { end(at: now) }
+        if newlyCompleted && mode == .focus && isActive && sessionTodoIDs == [item.id] { end(at: now) }
         editList { list in
-            if let index = change.index { list.items[index] = change.item }
-            else { list.items.append(change.item) }
-            if let next = change.nextOccurrence { list.items.append(next) }
+            if let index { list.items[index] = item }
+            else { list.items.append(item) }
+            if let nextOccurrence { list.items.append(nextOccurrence) }
         }
     }
 

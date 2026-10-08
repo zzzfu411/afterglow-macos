@@ -69,7 +69,7 @@ enum TodoWidgetCache {
         let source = directory.appendingPathComponent("focus-state.json")
         let metadata = try sourceMetadata(source)
         let url = directory.appendingPathComponent(filename)
-        if let old = try? readFile(url), old.version == TodoWidgetSnapshot.currentVersion,
+        if let old = try? readFile(url),
            old.sourceModifiedAt == metadata.modified, old.sourceBytes == metadata.bytes { return }
         let snapshot = TodoWidgetSnapshot(state: state, sourceModifiedAt: metadata.modified, sourceBytes: metadata.bytes)
         try validate(snapshot)

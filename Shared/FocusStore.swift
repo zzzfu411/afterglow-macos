@@ -1,11 +1,8 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#endif
 
 public enum FocusStoreError: Error, LocalizedError {
     case sharedContainerUnavailable(String)
-    case unsupportedPlatform
     case fileLockFailed(Int32)
     case oversizedData
     case invalidTodoAction
@@ -19,8 +16,6 @@ public enum FocusStoreError: Error, LocalizedError {
         switch self {
         case .sharedContainerUnavailable(let reason):
             return "共享存储不可用：\(reason)"
-        case .unsupportedPlatform:
-            return "此存储需要 macOS 文件锁支持。"
         case .fileLockFailed(let code):
             return "无法锁定计时数据（\(code)），请重试。"
         case .oversizedData:
@@ -109,16 +104,7 @@ public final class FocusStore: @unchecked Sendable {
     public func performActions(_ actions: [FocusAction], at now: Date = Date()) throws -> FocusState {
         guard actions.count <= 64 else { throw FocusStoreError.invalidTodoAction }
         return try transaction { previous in
-            var next = previous
-            for action in actions {
-                if case .selectTarget(let target) = action, target != .free {
-                    var list = next.todoList ?? FocusTodoList()
-                    list.target = target
-                    guard !list.selected.isEmpty else { throw FocusStoreError.invalidTodoAction }
-                }
-                next = next.applying(action, at: now)
-            }
-            return next
+            try actions.reduce(previous) { try $0.applyingChecked($1, at: now) }
         }
     }
 
@@ -128,8 +114,7 @@ public final class FocusStore: @unchecked Sendable {
         var previousForUndo: FocusState?
         let state = try transaction { previous in
             previousForUndo = previous
-            try Self.checkTodoAction(.setTodoCompleted(id, true), in: previous, at: now)
-            return previous.applying(.setTodoCompleted(id, true), at: now)
+            return try previous.applyingChecked(.setTodoCompleted(id, true), at: now)
         }
         return (state, previousForUndo.flatMap { FocusTodoCompletionUndo(id: id, previous: $0, updated: state) })
     }
@@ -143,12 +128,7 @@ public final class FocusStore: @unchecked Sendable {
         var previousForUndo: FocusState?
         let state = try transaction { previous in
             previousForUndo = previous
-            var next = previous.applying(.settle, at: now)
-            for action in actions {
-                try Self.checkTodoAction(action, in: next, at: now)
-                next = next.applying(action, at: now)
-            }
-            return next
+            return try actions.reduce(previous.applying(.settle, at: now)) { try $0.applyingChecked($1, at: now) }
         }
         // Use the canonical persisted values: JSON millisecond dates can differ
         // by a floating-point ULP from the incoming Date. Receipts must match disk.
@@ -204,45 +184,6 @@ public final class FocusStore: @unchecked Sendable {
         return lhs.allSatisfy { expected[$0.id] == $0 }
     }
 
-    private static func checkTodoAction(_ action: FocusAction, in state: FocusState, at now: Date) throws {
-        switch action {
-        case .addTodo(let item), .upsertTodo(let item):
-            _ = try state.preparingTodoUpsert(item, at: now)
-        case .replaceTodo(let expected, let replacement):
-            guard expected.id == replacement.id,
-                  state.todos.first(where: { $0.id == expected.id }) == expected else { throw FocusStoreError.editConflict }
-            try checkTodoAction(.upsertTodo(replacement), in: state, at: now)
-        case .editTodo(_, let title, let minutes, let dueDate):
-            guard FocusTodo(title: title, minutes: minutes, dueDate: dueDate).isValid else { throw FocusStoreError.invalidTodoAction }
-        case .restoreTodo(let id):
-            if var item = state.todos.first(where: { $0.id == id && $0.isDeleted }) {
-                item.deletedAt = nil
-                _ = try state.preparingTodoUpsert(item, at: now)
-            }
-        case .setTodoCompleted(let id, let completed):
-            if var item = state.todos.first(where: { $0.id == id && !$0.isDeleted }), item.isCompleted != completed {
-                item.isCompleted = completed
-                item.completedAt = completed ? now : nil
-                _ = try state.preparingTodoUpsert(item, at: now)
-            }
-        case .undoTodoCompletion(let undo):
-            _ = try state.applyingTodoUndo(undo.record)
-        case .upsertCollection(let collection):
-            guard collection.isValid else { throw FocusStoreError.invalidTodoAction }
-            let collections = state.todoList?.collections ?? []
-            guard collections.contains(where: { $0.id == collection.id }) || collections.count < TodoCollection.maximumCount else {
-                throw FocusStoreError.todoCapacityReached
-            }
-        case .purgeTodos(let ids):
-            guard ids.count <= FocusTodo.maximumStoredCount, Set(ids).count == ids.count,
-                  Set(ids).isSubset(of: Set(state.todos.filter(\.isDeleted).map(\.id))) else { throw FocusStoreError.invalidTodoAction }
-        case .reorderTodos(let ids):
-            guard ids.count <= FocusTodo.maximumCount, Set(ids).count == ids.count,
-                  Set(ids).isSubset(of: Set(state.todos.filter(\.isPending).map(\.id))) else { throw FocusStoreError.invalidTodoAction }
-        default: break
-        }
-    }
-
     @discardableResult
     public func toggle(at now: Date = Date()) throws -> FocusState {
         try transaction { previous in
@@ -268,18 +209,15 @@ public final class FocusStore: @unchecked Sendable {
         try withExclusiveLock { directory in
             let file = directory.appendingPathComponent("focus-state.json")
             let (previous, originalBytes) = try read(file)
-            let migrated = previous.migratedToCurrent()
-            try migrated.validate()
-            let next = try transform(migrated)
-            try next.validate()
+            let next = try transform(previous.migratedToCurrent())
             if next != previous {
                 let encoder = JSONEncoder()
                 encoder.dateEncodingStrategy = .millisecondsSince1970
                 encoder.outputFormatting = [.sortedKeys]
                 let bytes = try encoder.encode(next)
                 guard bytes.count <= Self.maximumFileBytes else { throw FocusStoreError.oversizedData }
-                // Decode and validate the candidate before creating its backup
-                // or replacing the live file; conversion never silently repairs corruption.
+                // Canonicalize millisecond dates so returned state and undo receipts
+                // match disk. Validate this final representation once before writing.
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .millisecondsSince1970
                 let persisted = try decoder.decode(FocusState.self, from: bytes)
@@ -289,7 +227,6 @@ public final class FocusStore: @unchecked Sendable {
                     try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
                     let backup = backupDirectory.appendingPathComponent("pre-v\(FocusState.currentVersion)-v\(previous.version)-\(UUID().uuidString).json")
                     try originalBytes.write(to: backup, options: .atomic)
-                    guard try Data(contentsOf: backup) == originalBytes else { throw FocusStateError.invalidData }
                 }
                 // Rename atomically while retaining the lock on a separate file.
                 try bytes.write(to: file, options: .atomic)
@@ -322,7 +259,6 @@ public final class FocusStore: @unchecked Sendable {
         }
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        #if canImport(Darwin)
         let lockPath = directory.appendingPathComponent("focus-state.lock").path
         let descriptor = Darwin.open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, mode_t(0o600))
         guard descriptor >= 0 else { throw FocusStoreError.fileLockFailed(errno) }
@@ -333,9 +269,6 @@ public final class FocusStore: @unchecked Sendable {
         }
         defer { _ = flock(descriptor, LOCK_UN) }
         return try body(directory)
-        #else
-        throw FocusStoreError.unsupportedPlatform
-        #endif
     }
 }
 
