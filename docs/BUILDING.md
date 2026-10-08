@@ -17,7 +17,7 @@ open .build/local/Moro.app
 
 0.7.0 组件源码展示今天的少量事项与当前专注：小号最多展示 2 项，中号最多 3 项；点事项打开主应用，计时控制通过 App Intents 执行。扩展读取专用快照，不读取完整备注、步骤和日志。
 
-**验证状态：本版小组件源码已通过编译和链接；完整 Xcode CI 尚待本次代码推送后运行。签名安装、系统图库和桌面交互仍待实机验证。** 历史版本 CI 通过不代表 0.7.0 已完成这部分验证。参见 [QA.md](../QA.md) 与 [CI 记录](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml)。
+**验证状态：本版小组件源码编译、链接和完整 Xcode CI 已通过；签名安装、系统图库和桌面交互仍待实机验证。** 本版 [CI 记录](https://github.com/zzzfu411/afterglow-macos/actions/runs/37769848982) 验证代码提交 `d968824`，关闭代码签名。完整边界见 [QA.md](../QA.md)。
 
 构建扩展需要完整 Xcode，以及能授权 App Group 的有效 Apple 签名配置。仅安装 Command Line Tools 或对主应用进行 ad-hoc 签名，不能完成这一步。
 

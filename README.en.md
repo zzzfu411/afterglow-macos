@@ -16,7 +16,7 @@
   <a href="#get-started">Get started</a> · <a href="docs/SIDEBAR.md">Usage</a> · <a href="docs/BUILDING.md">Build and widgets</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-> **0.7.0 preview:** tasks now lead the main window. Widget source compiles and links; this version's full Xcode CI, signed installation, and desktop interactions still need validation. See [QA.md](QA.md).
+> **0.7.0 preview:** tasks now lead the main window. [Checks and the full Xcode build pass](https://github.com/zzzfu411/afterglow-macos/actions/runs/37769848982); signed widget installation and desktop interactions still need validation. See [QA.md](QA.md).
 
 ## Why Moro
 
@@ -97,7 +97,7 @@ Native code, with no WebView, Electron, or third-party runtime dependency. Stora
 ./scripts/check-native.sh  # SwiftUI and WidgetKit compilation
 ```
 
-More test commands are in the [build guide](docs/BUILDING.md#开发检查). [GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) is configured for tests, native compilation, and a full Xcode build. **The full 0.7.0 Xcode CI run is pending this code being pushed**; older successful runs do not validate this version.
+More test commands are in the [build guide](docs/BUILDING.md#开发检查). [0.7.0 CI](https://github.com/zzzfu411/afterglow-macos/actions/runs/37769848982) passed tests, native compilation, and the full Xcode build for code commit `d968824`. CI disables code signing and does not validate signed installation or desktop interactions.
 
 ```text
 App/       Windows, tasks, quick entry, reminders, settings

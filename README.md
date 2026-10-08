@@ -18,7 +18,7 @@
   <a href="#快速开始">快速开始</a> · <a href="docs/SIDEBAR.md">使用方式</a> · <a href="docs/BUILDING.md">构建与小组件</a> · <a href="CONTRIBUTING.md">参与开发</a>
 </p>
 
-> **0.7.0 预览**：主界面以待办为中心。小组件源码已通过编译和链接；本版完整 Xcode CI、签名安装与桌面交互仍待验证。验证范围见 [QA.md](QA.md)。
+> **0.7.0 预览**：主界面以待办为中心。[完整 Xcode 构建与检查已通过](https://github.com/zzzfu411/afterglow-macos/actions/runs/37769848982)；桌面小组件的签名安装与交互仍待验证。验证范围见 [QA.md](QA.md)。
 
 ## 为什么做 Moro
 
@@ -99,7 +99,7 @@ open .build/local/Moro.app
 ./scripts/check-native.sh  # SwiftUI / WidgetKit 编译检查
 ```
 
-其他测试命令见 [构建文档](docs/BUILDING.md#开发检查)。[GitHub Actions](https://github.com/zzzfu411/afterglow-macos/actions/workflows/ci.yml) 配置了测试、原生编译和完整 Xcode 构建；**0.7.0 的完整 Xcode CI 尚待本次代码推送后运行**，历史版本的成功记录不能作为本版验证。
+其他测试命令见 [构建文档](docs/BUILDING.md#开发检查)。[0.7.0 CI](https://github.com/zzzfu411/afterglow-macos/actions/runs/37769848982) 已通过测试、原生编译和完整 Xcode 构建，验证代码提交为 `d968824`。CI 关闭代码签名，不代替签名安装与桌面验证。
 
 ```text
 App/       原生窗口、清单、快速录入、提醒与设置
